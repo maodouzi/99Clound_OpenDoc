@@ -1,0 +1,286 @@
+Tip_0 Prefix
+	Tip_0_1 Reference
+		《版本控制之道-使用git》
+		《Git使用简易指南》http://rogerdudler.github.com/git-guide/index.zh.html
+	Tip_0_1 快速查看本文的结构和常用git命令
+		grep -P "^\s*((Tip_)|(\*))" Note_git.txt | sed "s/\t\*/\t/" | sed "s/\t/    /g"
+	Tip_0_2 快速查看常用git命令
+		grep -P "^\s*\*" Note_git.txt | sed "s/\t\*/\t/" | sed "s/^\t*//g"
+	Tip_0_3 截至Page83，待续
+
+Tip_1 Install git
+
+	Tip_1_1 Ubuntu 12.04
+		Tip_1_1_1 install step
+			apt-get install git-core git-doc gitk git-gui kdiff3
+			git --version
+			例子: Version Check 
+				$ git --version
+				git version 1.7.9.5
+
+	Tip_1_2 Win7
+		Tip_1_2_1 Download
+			MSys Git: code.google.com/p/msysgit/
+		Tip_1_2_2 Install
+			一路确定
+
+Tip_2 Git config
+
+	Tip_2_1 init config
+		Tip_2_1_1 必需的配置
+			git config --global user.name "Wu Wenxiang"   
+			git config --global user.email "wu.wenxiang@99cloud.net"
+			这里的var，比如user.name，没有限制检查，写成user.name1也不会报错。
+			如果要删除某个var，可以用命令：
+			git config --global user.name --unset
+
+		Tip_2_1_2 颜色配置
+			git config --global color.ui "always"	#Windows
+			git config --global color.ui "auto"	#Linux
+
+		Tip_2_1_3 ci/co的简写：Page 48
+			git config --global alias.ci "commit"
+			git config --global alias.co "checkout"
+			git config --global alias.st "status"
+			git config --global alias.br "branch"
+		
+		Tip_2_1_4 vim编辑器的选择：Page 46
+			git config --global core.editor "vim"
+
+		Tip_2_1_5 diff工具的选择：Page 66
+			git config --global merge.tool kdiff3
+
+		Tip_2_1_6 初始化设置：
+git config --global user.name "Wu Wenxiang"   
+git config --global user.email "wu.wenxiang@99cloud.net"
+#git config --global color.ui "always"	#Windows
+git config --global color.ui "auto"	#Linux
+git config --global alias.ci "commit"
+git config --global alias.co "checkout"
+git config --global alias.st "status"
+git config --global alias.br "branch"
+git config --global core.editor "vim"
+git config --global merge.tool kdiff3
+
+		Tip_2_1_7 查看设置成功的变量值：
+			*git config --global --list
+		
+		Tip_2_1_8 查看所有可设置的变量值：	
+			*git help config  #man
+
+	Tip_2_2 git-gui command => git命令的gui模式
+		git gui => 用于新建/clone/打开已存在的git项目，用于完成提交等操作。
+		然后就交给gitk
+		触雷：新建本地库
+			报错：Spell checking is unavable:No word lists can be found for the language "zh_CN"
+			解决：vim ~/.gitconfig，然后添加以下内容：
+			[gui]
+				spellingdictionary = none	
+			参考：http://pseudo.hoop.blog.163.com/blog/static/13250911720101181545345/
+
+	Tip_2_3 config Check
+		例子：
+			$ git config --global --list
+			user.name=Wu Wenxiang
+			user.email=wu.wenxiang@99cloud.net
+			color.ui=always
+			gui.recentrepo=/home/pear/git-test
+			gui.spellingdictionary=none
+
+	Tip_2_4 gitk：用于现实版本库中的历史记录
+		cd git-test 
+		gitk 查看当前分支的的历史信息。加上--all参数，可以显示所有分支的历史。
+		*git gui/版本库/图示所有分支，可以看到version tree。
+
+Tip_3 Git Help
+	Tip_3_1 cmd help
+		*git help <command>
+	Tip_3_2 online help
+		1. http://kernel.org/pub/software/scm/git/，以git-htmldocs开头的
+		2. http://kernel.org/pub/software/scm/git/docs/
+	Tip_3_3 AsciiDoc
+		??? git需要AsciiDoc来把文档格式从纯文本转换成手册格式。
+		http://www.methods.co.nz/asciidoc/
+
+Tip_4 Git usage
+	Tip_4_1 创建版本库
+		mkdir mysite
+		cd mysite
+		*git init
+		*git clone git://github.com/tswicegood/mysite.git mysite-remote	#第二个参数是本地目录
+
+	Tip_4_2 提交修改
+		Tip_4_2_1 基本概念
+			工作目录树 => 暂存区(staging area) => 版本库
+
+		Tip_4_2_2 查看工作目录树中的状态
+			*git st
+			git status
+			红色，表示工作目录树里有修改或添加
+			#	modified:   index.html => 表示工作目录树中有修改。
+			#	about.html => 表示工作目录树中有添加。
+			绿色，表示暂存区里有修改或添加
+			#	new file:   about.html
+			#	modified:   index.html
+			
+		Tip_4_2_3 把修改从工作目录树提交到暂存区
+			git add
+			*git add index.html
+			git add -i，启动交互方式，Page42。
+	
+		Tip_4_2_4 把修改从暂存区中移回到工作目录树
+			*git reset HEAD about.html index.html 
+
+		Tip_4_2_5 查看文件改动
+			*git diff 
+			*git diff index.html	#查看工作目录树和暂存区里的文件改动
+			*git diff --cached	#查看暂存区和版本库中的文件改动
+			*git diff HEAD	#比较工作目录树（包括暂存和未暂存的）和版本库中的区别，HEAD表示当前分支所在末梢
+			*git diff 18f822e	#比较这个版本和当前工作目录树之间的差异，但未纳入git版本控制的新文件不在diff之列。
+			*git diff --stat 1.0	#统计tag 1.0和当前工作目录树之间的具体差异。
+		
+		Tip_4_2_6 把文件提交到版本库
+			*git ci -m "title" -m "details"
+			git commit -m "add index.html"		
+			可以用多个-m命令，每个log说明都另起一段。
+			通常第一个-m用一句话来概括提交，第二个-m来用几句话全面解释。
+			如果log要给第三方程序读，那么就要写完整程序需要的所有输入。
+			-m后面如果有\n，不会转义，原样输出的。
+			提交之后，会产生一个40位的SHA-1哈希码，相当于svn中的累计技术的数字版本号。通常用前7位来表示已经足够。
+		
+		Tip_4_2_7 三种提交策略
+			*git add -p	#用于提交文件的一部分修改，先暂存后提交
+			*git ci -m "changes somefile" file1 file2	#用于提交指定文件，直接从工作目录树提交到版本库
+			*git ci -m "changes somefile" -a	#用于提交工作目录树中所有修改内容，直接到版本库
+		
+		Tip_4_2_8 文件的重命名与移动
+			*git mv index.html hello.html
+			*git ci -m "rename"
+			或者：首先移动文件，调用命令git add添加新文件，最后调用命令git rm把旧文件从版本库中移除。
+			文件的复制会被git自动捕捉到，不用git cp，Page 79
+		
+		Tip_4_2_9 忽略文件
+			*.gitignore文件中，添加.*.swap，会忽略所有.号开头，.swap结尾的文件。*.bak会忽略所有.bak结尾的文件。
+			*.git/info/exclude中添加也可以忽略，但仅仅是本地忽略，而前者是版本库级别的忽略
+
+		Tip_4_2_10 增补提交
+			*git ci -C HEAD -a --amend	#-C表示复用留言
+			*git ci -c HEAD -a --amend	#-c会重新编辑留言
+			增补提交只能针对上一次提交。如果直接提交，会在版本库里多留下一次记录。
+
+		Tip_4_2_11 反转提交
+
+		Tip_4_2_12 复位
+		
+		Tip_4_2_13 重新改写历史记录
+			1. 提交重排序
+			2. 多个提交压缩成一个提交
+			3. 一个提交分解为多个提交
+
+	Tip_4_3 Log
+		
+		Tip_4_3_1 查看log
+			*git log	#显示所有log
+			*git log 7b1558c	#查看固定版本的日志
+			*git log -2	#只看最近2条
+			*git log --pretty=oneline	#单行显示，显示40位的提交名称SHA-1，以及第一行注释
+			*git log --pretty=format:"%h %s"	#显示7位的SHA-1，以及第一行注释
+		
+		Tip_4_3_2 指定时间范围的查找
+			*git log --since="5 hours"	#最近5小时内的提交，还可以是："1 minute", "24 hours", "2008-10.01"
+			*git log --before="5 hours" -1	#5小时之前的最后一个提交，同样可以用以上格式。
+
+		Tip_4_3_4 指定版本节点范围的查找
+			“最新版本..最老版本”，中间是两个点号，不包括起点，只包括终点。如果不输入最老版本，那么省略的值为HEAD。
+			版本可以是tag，也可以是7位或40位SHA-1码，也可以是HEAD。
+			HEAD^，一个脱字符^表示回溯一个版本。
+			~N，表示回溯N个版本。
+			HEAD^^^, HEAD^~2, HEAD~1^^, HEAD~3都表示HEAD节点的曾祖父节点（祖父节点的父节点）
+			*git log HEAD~10..HEAD
+		
+		Tip_4_3_5 查询提交细节
+			*git blame hello.html	#提交名称，提交人，提交时间，代码行
+			*git blame -L 12, 14 hello.html	#仅显示第12-14行
+			*git blame -L 12, +3 hello.html	#+3表示显示3行，12-14行
+			*git blame -L 12, -3 hello.html	#-3表示显示3行，10-12行
+			*git blame -L "/<\body>/", +2 hello.html	#正则表达式，往后一共显示两行。
+			*git blame -L "/<\body>/", +2 4333289e^ -- hello.html	#只查询4333289e之前的版本。
+		
+		Tip_4_3_6 内容跟踪
+			*git blame -M original.txt	#-M表示把文件内的行复制作为同一次提交。
+			*git blame -C -C copy.txt	#-C -C表示查看文件copy.txt的初始文件名，和对应初始文件名的初始提交。
+			Page81。如果初始文件内部存在复制，只看到初次提交。
+			*git log -C -C -1 -p	#-p会显示代码的具体变动。
+
+	Tip_4_4 分支和Label
+		Tip_4_4_1 创建新分支
+			*git branch RB_1.0 master	#前面的RB_1.0是新分支名称，后面一个是父分支名称，表示在父分支的梢上创建，也可有是label名。
+			master相当于trunk，是默认的主分支。
+			*git branch	#查看当前分支, git st也可以看到
+			创建新分支的用处：1. 试验性修改，2. 增加新功能, 3. Bug修复
+		
+		Tip_4_4_2 切换分支
+			*git co RB_1.0 用来切换分支。
+			把分支上的梢内容，覆盖到工作目录树。
+			原来工作目录树上的变化和暂存区里的变化会怎样？会保留给到另一个分支的工作目录树和暂存区里去。
+			*git co -b alternate master	#表示从主分支的末梢创建新分支alternate，并co到alternate分支
+		
+		Tip_4_4_3 打Label
+			*git tag 1.0 RB_1.0	#为RB_1.0分支的末梢打上1.0的标
+			*git tag		#可以察看版本库中的标签列表。
+		
+		Tip_4_4_4 变基
+			*git rebase RB1.0	
+			假定A/B分支的分叉点是Y，站在B上，要变基到A。
+			会把从Y到B当前末梢之间的所有提交，顺序加到A的末梢上去，生成新的B分支
+			而A分支没有任何变化。
+
+		Tip_4_4_5 删除分支
+			*git branch -d RB_1.0	#仅仅删除了标签的名字，并没有删除任何实际内容，只有当这个分支已经合并完成，才能这样删除
+			*git branch -D RB_2.0	#没有合并的分支，-D表示强制删除。			
+
+		Tip_4_4_6 分支更名
+			git branch -m master mymaster	#把分支master改名位mymaster
+
+		Tip_4_4_7 分支间的合并
+			Tip_4_4_7_1 三种合并方式
+				*git merge alternate	#直接合并，把alternate分支上的所有修改合并到当前分支
+				如果没冲突，就直接提交到版本库，如果有冲突，需要用git mergetool，来修改，然后会放入到暂存区。
+				*git merge --squash contact	#压合合并，所有修改合并成一次提交，放到当前分支的暂存区。需要git ci才行。
+				*git cherry-pick 321d76f	#拣选合并，没有冲突的话，就直接进数据库了
+				*git cherry-pick -n 321d76f	#进暂存区，所次-n的结果都会放在暂存区，等待一次性提交。git ci。
+			Tip_4_4_7_2 冲突处理
+				git merge时，有时会出现conflict，无法自动merge。
+				*git mergetool
+
+	Tip_4_5 发布工具
+		Tip_4_5_1 归档处理
+			*git archive --format=tar --prefix=mysite-1.0/ 1.0 | gzip > mysite-1.0.tar.gz
+			*git archive --format=zip --prefix=mysite-1.0/ 1.0 > mysite-1.0.zip
+			--prefix指明包中所有的东西都放到mysite-1.0目录下。
+			1.0指明需要归档的标签名称。
+			这条命令必需在工作目录树中运行，运行时，会把所有文件，除.git的以外，放入到mysite-1.0目录下，然后打包。
+
+	Tip_4_6 与远程版本库的协作
+		Tip_4_6_1 版本库同步
+			*git br	#查看本地分支，带*的表示被选中的分支，可以检出远程分支???但是不应该修改，应该从远程分支上创建本地分支，然后进行修改。
+			*git br -r	#查看远程分支
+			*git fetch	#更新远程分支，但是不会把修改合并到本地分支。
+			*git pull			
+			*git pull git://a.com/dev.git master	#第一个参数是远程版本库的名称，后一个参数是分支名称（标签，HEAD应该也可???），不用加original
+		Tip_4_6_2 推入改动
+			*git push 
+			*git push git://a.com/dev.git master
+		Tip_4_6_3 添加新的远程版本库
+			*git remote add erin git://a.com/dev.git	#为远程数据库添加别名erin
+			*git pull erin HEAD
+			*git remote show	#查看别名
+			*git remote rm	#删除别名
+		
+Tip_5 Github
+	Tip_5_1 注册
+		www.github.com
+	Tip_5_2 创建一个新的repository
+		New Repository
+	Tip_5_3 版本库	
+		99Clound_OpenDoc: https://github.com/maodouzi/99Clound_OpenDoc.git
