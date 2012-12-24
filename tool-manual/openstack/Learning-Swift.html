@@ -1,0 +1,1973 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+<head>
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <meta name="generator" content="ReText 2.1.6">
+  <title>Note_Swift</title>
+</head>
+<body>
+<h1>Learning Swift</h1>
+<p>Email: wu.wenxiang@99cloud.net</p>
+<p>Email: maodouzi@gmail.com</p>
+<p>Sina Weibo: @wu_wenxiang</p>
+<ul>
+<li><a href="#h2_swift_overview">概述</a></li>
+<li><a href="#h2_swift_install">安装</a><ul>
+<li><a href="#h3_swift_install_basic">安装基本系统</a></li>
+<li><a href="#h3_swift_install_swift">安装Swift</a></li>
+</ul>
+</li>
+<li><a href="#h2_swift_source">源代码分析</a><ul>
+<li><a href="#h3_swift_source_client">SwiftClient</a></li>
+<li><a href="#h3_swift_source_swift">Swift</a></li>
+</ul>
+</li>
+</ul>
+<hr />
+<h2 id="h2_swift_overview">概述</h2>
+
+<p>Swift是OpenStack的组件之一，是一个分布式的对象存储系统。
+<h2 id="h2_swift_install">安装</h2>
+<h3 id="h3_swift_install_basic">安装基本系统</h3>
+请参见《Learning DevStack》篇中，“安装基本系统”章节。
+<h3 id="h3_swift_install_swift">安装Swift</h3></p>
+<ol>
+<li>
+<p>安装步骤</p>
+<ol>
+<li>
+<p>系统更新</p>
+<pre><code>sudo apt-get update &amp;&amp; sudo apt-get dist-upgrade -y
+</code></pre>
+</li>
+<li>
+<p>安装依赖的软件包</p>
+<pre><code>sudo apt-get install build-essential python-dev \
+    python-setuptools python-pip libxml2-dev libxslt-dev \
+    memcached xfsprogs -y
+</code></pre>
+</li>
+<li>
+<p>下载swift源码包并安装配置</p>
+<pre><code>cd ~ &amp;&amp; git clone git://github.com/openstack/swift.git
+cd ~/swift &amp;&amp; sudo pip install -r tools/pip-requires
+cd ~/swift &amp;&amp; sudo python setup.py install
+sudo groupadd swift
+sudo useradd -g swift swift
+sudo mkdir /etc/swift
+sudo touch /etc/swift/swift.conf
+sudo chmod o+w /etc/swift/swift.conf
+echo -e "[swift-hash]\nswift_hash_path_suffix = \
+    9ce957bfb8fbf7eb" &gt; /etc/swift/swift.conf
+sudo chmod o-w /etc/swift/swift.conf
+sudo mkdir /var/cache/swift
+sudo chown -R swift:swift /var/cache/swift
+</code></pre>
+</li>
+<li>
+<p>SSL Key</p>
+<pre><code>openssl version &amp;&amp; cd /etc/swift
+sudo openssl req -new -x509 -nodes -out cert.crt -keyout \
+    cert.key
+</code></pre>
+</li>
+<li>
+<p>配置和启动memcached</p>
+<pre><code>sudo sed -i 's/127.0.0.1/0.0.0.0/g' /etc/memcached.conf
+sudo service memcached restart
+</code></pre>
+</li>
+<li>
+<p>Keystone服务器上添加swift的services和endpoint</p>
+<p>参见《Learning Keystone》中“Keystone安装”篇</p>
+</li>
+<li>
+<p>配置文件proxy-server.conf</p>
+<pre><code>[DEFAULT]
+bind_ip = 0.0.0.0
+bind_port = 8080
+swift_dir = /etc/swift
+workers = 1
+user = swift
+cert_file = /etc/swift/cert.crt
+key_file = /etc/swift/cert.key
+log_name = swift
+log_facility = LOG_LOCAL0
+log_level = DEBUG
+
+[pipeline:main]
+pipeline = catch_errors healthcheck cache ratelimit authtoken \
+keystone proxy-server
+
+[app:proxy-server]
+use = egg:swift#proxy
+account_autocreate = true
+log_level = DEBUG
+
+[filter:authtoken]
+paste.filter_factory = keystone.middleware.auth_token:\
+    filter_factory
+#the host must point to your keystone server
+auth_host = localhost
+auth_port = 35357
+auth_token = ADMIN
+auth_protocol=http
+service_host = localhost
+service_port = 5000
+admin_token = ADMIN
+admin_user = admin
+admin_password = openstack
+admin_tenant_name = adminTenant
+delay_auth_decision = 1
+
+[filter:keystone]
+paste.filter_factory = keystone.middleware.swift_auth:\
+    filter_factory
+operator_roles = adminRole, swiftoperator
+is_admin = true
+#reseller_prefix=AUTH
+
+[filter:healthcheck]
+use = egg:swift#healthcheck
+
+[filter:cache]
+use = egg:swift#memcache
+memcache_servers = 127.0.0.1:11211
+
+[filter:ratelimit]
+use = egg:swift#ratelimit
+
+[filter:domain_remap]
+use = egg:swift#domain_remap
+
+[filter:catch_errors]
+use = egg:swift#catch_errors
+</code></pre>
+</li>
+<li>
+<p>存储区的创建</p>
+<p>本文为Swift安排了3块VirtIO disk，大小为5G，用fdisk分区：</p>
+<pre><code>sudo fdisk /dev/vdb
+    n/p/默认/默认/默认/w
+sudo fdisk /dev/vdc
+    n/p/默认/默认/默认/w
+sudo fdisk /dev/vdd
+    n/p/默认/默认/默认/w
+</code></pre>
+<p>格式化：</p>
+<pre><code>sudo mkfs.xfs -i size=1024 /dev/vdb1
+sudo mkfs.xfs -i size=1024 /dev/vdc1
+sudo mkfs.xfs -i size=1024 /dev/vdd1
+</code></pre>
+<p>开机自动mount分区：</p>
+<pre><code>sudo -s
+echo "/dev/vdb1 /srv/1/node/vdb1 xfs noatime,nodiratime,\
+    nobarrier,logbufs=8 0 0" &gt;&gt; /etc/fstab 
+echo "/dev/vdc1 /srv/2/node/vdc1 xfs noatime,nodiratime,\
+    nobarrier,logbufs=8 0 0" &gt;&gt; /etc/fstab
+echo "/dev/vdd1 /srv/3/node/vdd1 xfs noatime,nodiratime,\
+    nobarrier,logbufs=8 0 0" &gt;&gt; /etc/fstab
+exit
+</code></pre>
+</li>
+<li>
+<p>创建Node</p>
+<pre><code>sudo mkdir -p /srv/1/node/vdb1
+sudo mkdir -p /srv/2/node/vdc1
+sudo mkdir -p /srv/3/node/vdd1
+sudo mount -a
+sudo chown -R swift:swift /srv/1/node
+sudo chown -R swift:swift /srv/2/node
+sudo chown -R swift:swift /srv/3/node
+</code></pre>
+</li>
+<li>
+<p>配置rsyncd：/etc/rsyncd.conf</p>
+<pre><code>uid = swift
+gid = swift
+log file = /var/log/rsyncd.log
+pid file = /var/run/rsyncd.pid
+address = 127.0.0.1
+
+[account6012]
+max connections = 25
+path = /srv/1/node/
+read only = false
+lock file = /var/lock/account6012.lock
+
+[account6022]
+max connections = 25
+path = /srv/2/node/
+read only = false
+lock file = /var/lock/account6022.lock
+
+[account6032]
+max connections = 25
+path = /srv/3/node/
+read only = false
+lock file = /var/lock/account6032.lock
+
+[container6011]
+max connections = 25
+path = /srv/1/node/
+read only = false
+lock file = /var/lock/container6011.lock
+
+[container6021]
+max connections = 25
+path = /srv/2/node/
+read only = false
+lock file = /var/lock/container6021.lock
+
+[container6031]
+max connections = 25
+path = /srv/3/node/
+read only = false
+lock file = /var/lock/container6031.lock
+
+[object6010]
+max connections = 25
+path = /srv/1/node/
+read only = false
+lock file = /var/lock/object6010.lock
+
+[object6020]
+max connections = 25
+path = /srv/2/node/
+read only = false
+lock file = /var/lock/object6020.lock
+
+[object6030]
+max connections = 25
+path = /srv/3/node/
+read only = false
+lock file = /var/lock/object6030.lock
+</code></pre>
+</li>
+<li>
+<p>配置和启动rsync</p>
+<pre><code>sudo sed -i 's/RSYNC_ENABLE=false/RSYNC_ENABLE=true/g' \
+    /etc/default/rsync
+sudo service rsync start
+</code></pre>
+</li>
+<li>
+<p>建Ring File</p>
+<p>三个Ring，18表示分区将被处理为2 ^ 18th，2表示2个副本，1表示1小时，是限制分区数据转移的时间。</p>
+<pre><code>sudo swift-ring-builder account.builder create 18 2 1
+sudo swift-ring-builder container.builder create 18 2 1
+sudo swift-ring-builder object.builder create 18 2 1
+
+sudo swift-ring-builder account.builder add \
+    z1-192.168.122.139:6012/vdb1 100
+sudo swift-ring-builder container.builder add \
+    z1-192.168.122.139:6011/vdb1 100
+sudo swift-ring-builder object.builder add \
+    z1-192.168.122.139:6010/vdb1 100
+sudo swift-ring-builder account.builder add \
+    z2-192.168.122.139:6022/vdc1 100
+sudo swift-ring-builder container.builder add \
+    z2-192.168.122.139:6021/vdc1 100
+sudo swift-ring-builder object.builder add \
+    z2-192.168.122.139:6020/vdc1 100
+sudo swift-ring-builder account.builder add \
+    z3-192.168.122.139:6032/vdd1 100
+sudo swift-ring-builder container.builder add \ 
+    z3-192.168.122.139:6031/vdd1 100
+sudo swift-ring-builder object.builder add \
+    z3-192.168.122.139:6030/vdd1 100
+</code></pre>
+<p>当创建好了Ring文件， 你可以通过下面的命令来验证刚才添加的内容是否正确。</p>
+<pre><code>swift-ring-builder account.builder
+swift-ring-builder container.builder
+swift-ring-builder object.builder
+</code></pre>
+<p>如果没有问题，创建最终的ring：</p>
+<pre><code>sudo swift-ring-builder account.builder rebalance
+sudo swift-ring-builder container.builder rebalance
+sudo swift-ring-builder object.builder rebalance
+</code></pre>
+</li>
+<li>
+<p>配置account-server, container-server和object-server</p>
+<p>创建目录：</p>
+<pre><code>sudo mkdir -p /etc/swift/account-server /etc/swift/\
+    container-server /etc/swift/object-server
+</code></pre>
+<p>account-server配置文件：</p>
+<pre><code>/etc/swift/account-server/1.conf
+[DEFAULT]
+devices = /srv/1/node
+mount_check = false
+disable_fallocate = true
+bind_port = 6012
+user = swift
+log_facility = LOG_LOCAL2
+recon_cache_path = /var/cache/swift
+
+[pipeline:main]
+pipeline = recon account-server
+
+[app:account-server]
+use = egg:swift#account
+
+[filter:recon]
+use = egg:swift#recon
+
+[account-replicator]
+vm_test_mode = yes
+
+[account-auditor]
+
+[account-reaper]
+</code></pre>
+<p>建立另外两个同类的配置文件：</p>
+<pre><code>cd /etc/swift/account-server/
+sudo cp 1.conf 2.conf
+sudo sed -i "s/srv\/1\/node/srv\/2\/node/" 2.conf
+sudo sed -i "s/6012/6022/" 2.conf
+sudo cp 1.conf 3.conf
+sudo sed -i "s/srv\/1\/node/srv\/3\/node/" 3.conf
+sudo sed -i "s/6012/6032/" 3.conf
+</code></pre>
+<p>container-server配置文件：/etc/swift/container-server/1.conf</p>
+<pre><code>[DEFAULT]
+devices = /srv/1/node
+mount_check = false
+disable_fallocate = true
+bind_port = 6011
+user = swift
+log_facility = LOG_LOCAL2
+recon_cache_path = /var/cache/swift
+
+[pipeline:main]
+pipeline = recon container-server
+
+[app:container-server]
+use = egg:swift#container
+
+[filter:recon]
+use = egg:swift#recon
+
+[container-replicator]
+vm_test_mode = yes
+
+[container-updater]
+
+[container-auditor]
+
+[container-sync]
+</code></pre>
+<p>建立另外两个同类的配置文件：</p>
+<pre><code>cd /etc/swift/container-server
+sudo cp 1.conf 2.conf
+sudo sed -i "s/srv\/1\/node/srv\/2\/node/" 2.conf
+sudo sed -i "s/6011/6021/" 2.conf
+sudo cp 1.conf 3.conf
+sudo sed -i "s/srv\/1\/node/srv\/3\/node/" 3.conf
+sudo sed -i "s/6011/6031/" 3.conf
+</code></pre>
+<p>object-server配置文件：/etc/swift/object-server/1.conf</p>
+<pre><code>[DEFAULT]
+devices = /srv/1/node
+mount_check = false
+disable_fallocate = true
+bind_port = 6010
+user = swift
+log_facility = LOG_LOCAL2
+recon_cache_path = /var/cache/swift
+
+[pipeline:main]
+pipeline = recon object-server
+
+[app:object-server]
+use = egg:swift#object
+
+[filter:recon]
+use = egg:swift#recon
+
+[object-replicator]
+vm_test_mode = yes
+
+[object-updater]
+
+[object-auditor]
+</code></pre>
+<p>建立另外两个同类的配置文件：</p>
+<pre><code>cd /etc/swift/object-server
+sudo cp 1.conf 2.conf
+sudo sed -i "s/srv\/1\/node/srv\/2\/node/" 2.conf
+sudo sed -i "s/6010/6020/" 2.conf
+sudo cp 1.conf 3.conf
+sudo sed -i "s/srv\/1\/node/srv\/3\/node/" 3.conf
+sudo sed -i "s/6010/6030/" 3.conf
+</code></pre>
+</li>
+<li>
+<p>keystone-signing</p>
+<pre><code>mkdir -p ~/keystone-signing
+sudo chown -R swift:swift ~/keystone-signing
+sudo mkdir -p /var/cache/swift
+sudo chown -R swift:swift /var/cache/swift
+</code></pre>
+</li>
+</ol>
+</li>
+<li>
+<p>启动Swift</p>
+<pre><code>sudo swift-init all start
+</code></pre>
+</li>
+<li>
+<p>测试</p>
+<pre><code># 查看统计
+swift -V 2 -A http://localhost:5000/v2.0 -U admin:admin -K 231 \
+    stat
+# 创建一个container：testDir
+swift -V 2 -A http://localhost:5000/v2.0 -U admin:admin -K 231 \
+    post testDir
+# 在testDir里上传一个object：testFile，命名为testFile1
+swift -V 2 -A http://localhost:5000/v2.0 -U admin:admin -K 231 \
+    upload testDir testFile testFile1
+</code></pre>
+</li>
+</ol>
+<h2 id="h2_swift_source">源代码分析</h2>
+
+<h3 id="h3_swift_source_client">SwiftClient</h3>
+
+<ol>
+<li>
+<p>代码结构</p>
+<p>Swift Client的主要代码文件如下：</p>
+<pre><code>./bin/swift # 命令行入口
+./swiftclient/client.py # Client核心代码
+./tests/test_swiftclient.py # Client单元测试代码
+./tests/utils.py # 测试库函数
+</code></pre>
+</li>
+<li>
+<p>bin/swift</p>
+<p>bin/swift启动了两个线程：print_thread和err_thread。这两个线程都是QueueFunctionThread类的实例。在这个类从Queue里取任务，然后执行。</p>
+<p>执行的命令从命令行参数来，分为'delete', 'download', 'list', 'post', 'stat', 'upload'六类，分别对应于bin/swift module里六个st_前缀的。</p>
+<p>以st_download为例，在这个方法里启动了两个线程，也是QueueFunctionThread类的实例，分别用来download container和object。对应的处理函数是st_download函数的闭包函数，_download_container和_download_object。</p>
+<p>以_download_container为例，这个方法接受两个参数，一个是container的标识，另一个是swiftclient.client.Connection类的实例conn。_download_container的处理逻辑是调用conn实例中对应的API函数，这里是conn.get_container(container, marker=marker)。</p>
+<p>其余类同。</p>
+</li>
+<li>
+<p>swiftclient.client</p>
+<p>swiftclient.client.Connection类用_retry方法封装了定义在swiftclient.client模块中的各个API函数，如get_container。</p>
+<p>_retry(self, reset_func, func, <em>args, </em>*kwargs)的处理逻辑是：在有限的次数内，反复尝试向swift发起业务请求。在每一次请求中，函数体会先查找endpoint和token是否存在，如果没有，就向keystone请求验证get_auth(RAW_PATH_INFO = /v2.0/tokens，用到了keystone client的API来向keystone请求token并解析response)，得到了token和swift的endpoint再向swift请求。</p>
+<p>请求中的endpoint就是url，形如http://192.168.122.90:8080/v1/AUTH_f5a836cb571747a691f4dec2eb7af6a4)，token放在{'headers': {'X-Auth-Token': u'95728c28d6c54af7b0fed9929480466d'}里面。Swift收到请求后，会向keystone要求验证(RAW_PATH_INFO = /v2.0/tokens/95728c28d6c54af7b0fed9929480466d)，验证通过后会响应用户的请求，给出回复。</p>
+<p>如果向_retry函数传递了reset_func，那么每一次向swift请求失败，并且没有命中except时，就会执行reset_fun，通常用于触发预设的异常。</p>
+<p>被_retry封装的API也定义在这个模块里，比如get_container。这些API用HttpConnection和json向Swift请求服务。</p>
+</li>
+<li>
+<p>tests.test_swiftclient</p>
+<p>运行方法：</p>
+<pre><code>pip install tox
+./run_tests.sh
+</code></pre>
+</li>
+</ol>
+<h3 id="h3_swift_source_swift">Swift</h3>
+
+<ol>
+<li>
+<p>若干概念</p>
+<ol>
+<li>
+<p>Authentication：</p>
+<p>可以用keystone，也可以用swauth
+所有操作都必须包含一个有效的授权令牌（从您的授权系统获得）。</p>
+</li>
+<li>
+<p>访问控制</p>
+<p>使用X-Container-Read: accountname和X-Container-Write: accountname:username, 使来自accountname帐号的任何用户可以读，但是只允许来自accountname帐号的username用户可以写。</p>
+</li>
+<li>
+<p>容器和对象</p>
+<ol>
+<li>容器有点像文件夹</li>
+<li>容器不能嵌套</li>
+<li>对象必须保存在容器中</li>
+<li>一个账户可以创建无数个容器</li>
+<li>容器名称不能包含一个正斜杠（/），必须小于256个字节的长度。容器名称会被URL编码。Course Docs会变成Course%20Docs，因此是13个字节长度，而不是预期的11。</li>
+<li>当您上传数据至OpenStack对象存储，数据不会被压缩或加密。上传的内容包括容器，对象的名字，和键/值对组成的Meta数据（比如“专辑：滑雪”）之类。</li>
+<li>对象名经URL编码后，长度必须小于1024。</li>
+<li>对象的大小是0B-5GB，超过5G的可以用build-in的大对象存储和swift-utility来存取。</li>
+<li>一个对象上包含的元数据长度不能超过4K，键值对个数不能超过90个。</li>
+</ol>
+</li>
+<li>
+<p>Ring</p>
+<p>Ring是实体名称和物理位置之间的对应关系，Account/Container/Object都各自有一个Ring。每次操作他们时，首先都要和他们的Ring打交道，查到他们在cluster中的位置。</p>
+<p>Ring通过zones,devices,partitions和replicas来维护映射关系。默认每一个partition在cluster间会被复制三份，存储位置维护在Ring里。Ring也负责决定哪一个Device用于故障时handoff。</p>
+<p>数据被Ring里的Zone分隔开。每一个partition的副本需要保存在不同的zone里。一个Zone可以是一个drive(硬盘分区), server(一台机器), cabinet(机架), switch, 或者datacenter.</p>
+<p>Partition会被大致平均分到所有的device上去，当有一个devices被新加入进来，Ring保证移动最少数量的partition，并且一个partition只移动一个副本。</p>
+<p>如果cluster中有不同大小的devices，那么Ring会按照每个devices的权重系数来为这个devices分配不同数量的partition。</p>
+<p>Ring被Proxy server和一些后台的several进程使用，如replication。</p>
+<p>Ring被ring-builder建好之后，其结构包括三部分：1. cluster上的devices列表，2. devices上的partition的MD5列表，3. 一个数字，用于生成partition的MD5列表。</p>
+</li>
+<li>
+<p>Proxy Server</p>
+<p>Proxy Server处理public API请求，对每一个请求，Proxy Server会去查找account/container/object在Ring中的location，然后路由这些请求到响应的location去。</p>
+<p>Proxy Server也用于处理错误，比如一个server不能处理PUT对象的操作了，它就通过Ring找到一个hand-off的server，然后route过去。</p>
+<p>存储和读取对象时，Proxy不会作缓存。</p>
+<p>在配置文件中启用帐户管理后，可以通过Proxy Server管理帐号。</p>
+</li>
+<li>
+<p>Object Server</p>
+<p>对象服务器是一个简单的BLOB服务器：存储较大无结构的二进制数据。可以在本地devices上存储，检索，删除对象。</p>
+<p>Object被当作二进制文件存储在文件系统中。Object的metadata存在文件的扩展属性xattrs里，这需要底层文件系统的支持xattrs。比如ext3默认会关闭xattrs支持。</p>
+<p>每一个对象的存储路径由对象名称的hash和操作的时间戳构成。后写为准，并且保证最近的版本被取到。swift根据时间戳来判断谁是最新的数据版本。如果删除一个对象，会产生一个0字节的.ts后缀文件，这用来防止老版本被错误的取到。</p>
+</li>
+<li>
+<p>Container Server</p>
+<p>Container Server的主要工作是列出对象，他并不知道这些对象在哪，只知道哪些对象在哪个特定的container里。listings作为sqlite database文件存储，并像对象一样在cluster间有备份。可统计container里对象的总数目和总存储空间。</p>
+</li>
+<li>
+<p>Account Server</p>
+<p>很像Container Server，唯一的区别是listings是containers而不是objects.</p>
+</li>
+<li>
+<p>Replication</p>
+<p>Replication是用于HA。replication进程们比较本地和其他所有远程copy来确保他们包含最近的版本。对象复制用hash列表来快速比较每一个partition的子section，account和container的复制则兼用hash和shared high water marks???</p>
+<p>Replication基于push来更新。文件的更新只是把文件rsyncing到对端。Account和container replication通过HTTP来差量push缺失的记录或者rsyncing整个数据库文件。</p>
+<p>文件若被删除，ts文件也要被备份。 </p>
+</li>
+<li>
+<p>Updaters</p>
+<p>当出现故障或者Load过高时，一次写入操作可能会失败，此时Updaters进程会handle后续的再次写入尝试。例如，往一个Container里添加一个Object，三个Node只有一个写成功，只要response到了Proxy Server，用户就可以开始读取这个Object。另外两个没有写成功的节点，会由本地的Updaters进程接手再次写入，此时读取这两个节点上的Container List，你会发现并不包含这个新的Object。但在实际使用时，Proxy Server会取第一个返回的结果，能写成功的往往Load低会先返回，所以用户不会拿到不包含新Object的List。</p>
+</li>
+<li>
+<p>Auditors</p>
+<p>Auditors用于检查本地server上的objects，containers和accounts的数据完整性，如果检查出某个文件有bit错误，该文件会被隔离，Replication会负责重新拷贝一个复制来替代当前出错的文件。其它错误也会被log下来。</p>
+</li>
+<li>
+<p>配置</p>
+<p>Proxy是CPU+网络IO密集型，存储节点是硬盘IO和网络IO密集型。</p>
+<p>所以Proxy的网卡和CPU要好一点的，存储节点的硬盘最好是SSD。</p>
+<p>较好的的初始配置思路是推算好会有多少个driver，然后乘以100就是partition的数目，再向上取到一个最小的2的次幂数。</p>
+<p>Zone的数量至少要有五个才行，最好把每个Zone的电源和网络都独立。</p>
+<p>创建一个ring：</p>
+<pre><code>swift-ring-builder &lt;builder_file&gt; create &lt;part_power&gt; \
+    &lt;replicas&gt; &lt;min_part_hours&gt;
+</code></pre>
+<p>把device加入ring：</p>
+<pre><code>swift-ring-builder &lt;builder_file&gt; add z&lt;zone&gt;-&lt;ip&gt;:\
+    &lt;port&gt;/&lt;device_name&gt;_&lt;meta&gt; &lt;weight&gt;
+</code></pre>
+<p>所有的device都加入到ring之后：</p>
+<pre><code>swift-ring-builder &lt;builder_file&gt; rebalance
+</code></pre>
+<p>Memery Cache只在Proxy Server上用。</p>
+<p>Ring建好之后，把ring的配置文件，3过gz文件，拷贝到各个proxy和storage的节点上去。</p>
+<p>MemCache可用于AuthToken，Account/Container的存在检查，但不用于任何实际的Object缓存。</p>
+</li>
+<li>
+<p>Log</p>
+<p>Log直接到syslog里面。</p>
+</li>
+<li>
+<p>Rebalance进程会反复运行，直至接近完美(1%以内的误差)</p>
+</li>
+<li>
+<p>Account Reaper</p>
+<p>Account Reaper在Account Server里，他负责把打上delete标签的account及其内容全部删掉。一次不行再来一次，删完为止。删account时，会有一个主节点来指挥删除过程。</p>
+</li>
+</ol>
+</li>
+<li>
+<p>进程间关系</p>
+<p>单节点的Swift进程Dump：</p>
+<pre><code>进程号 父进程号        可执行文件           配置文件        
+3306    1   swift-container-updater container-server/1.conf
+3307    1   swift-account-auditor   account-server/1.conf
+3308    1   swift-object-replicator object-server/1.conf
+3310    1   swift-container-replicator  container-server/1.conf
+3311    1   swift-object-auditor    object-server/1.conf
+3312    1   swift-container-auditor container-server/1.conf
+3313    1   swift-container-server  container-server/1.conf
+3314    1   swift-account-server    account-server/1.conf
+3315    1   swift-account-reaper    account-server/1.conf
+3316    1   swift-container-sync    container-server/1.conf
+3317    1   swift-account-replicator    account-server/1.conf
+3318    1   swift-object-updater    object-server/1.conf
+3319    1   swift-object-server object-server/1.conf
+3359    3311    swift-object-auditor    object-server/1.conf
+3374    3313    swift-container-server  container-server/1.conf
+3376    3314    swift-account-server    account-server/1.conf
+3379    3319    swift-object-server object-server/1.conf
+4881    4823    swift-proxy-server  proxy-server.conf
+4946    4881    swift-proxy-server  proxy-server.conf
+</code></pre>
+<p>如果用devstack安装，则除了swift-proxy-server在源代码目录下，其余的可执行文件在/usr/local/bin/目录下。配置文件都在/etc/swift下面。 </p>
+</li>
+<li>
+<p>bin文件分析</p>
+<ol>
+<li>
+<p>swift-account-audit</p>
+<p>client，用于查询服务器上的account，包括其中的container和object。</p>
+</li>
+<li>
+<p>swift-account-auditor</p>
+<p>local，用于查询本地的account数据库。</p>
+</li>
+<li>
+<p>swift-account-reaper</p>
+<p>local，用于删除被打上deleted标记的account相关的数据。后台的删除进程会在一个primary的account server上执行。</p>
+</li>
+<li>
+<p>swift-account-replicator</p>
+<p>local，用于account同步。</p>
+</li>
+<li>
+<p>swift-account-server</p>
+<p>server，用于处理account相关请求</p>
+</li>
+<li>
+<p>swift-bench</p>
+<p>测试工具</p>
+</li>
+<li>
+<p>swift-bench-client</p>
+<p>bench客户端</p>
+</li>
+<li>
+<p>swift-container-auditor</p>
+<p>local，用于查询本地的container数据库。</p>
+</li>
+<li>
+<p>swift-container-replicator</p>
+<p>local，用于container数据库文件同步</p>
+</li>
+<li>
+<p>swift-container-server</p>
+<p>server，用于container相关请求</p>
+</li>
+<li>
+<p>swift-container-sync</p>
+<p>local，用于container数据库内的行同步</p>
+</li>
+<li>
+<p>swift-container-updater</p>
+<p>Update container information in account listings.</p>
+</li>
+<li>
+<p>swift-dispersion-populate</p>
+<p>为containers和objects生成随机的名字，知道他们被打散存储到不同的partition</p>
+</li>
+<li>
+<p>swift-dispersion-report</p>
+<p>检查cluster的健康状况，object的副本们是不是存储在合适的地方？</p>
+</li>
+<li>
+<p>swift-drive-audit</p>
+<p>client，可以通过cron运行，来定期查找坏的drivers</p>
+</li>
+<li>
+<p>swift-form-signature</p>
+</li>
+<li>
+<p>swift-get-nodes</p>
+<p>Shows the nodes responsible for the item specified.</p>
+</li>
+<li>
+<p>swift-init</p>
+</li>
+<li>
+<p>swift-object-auditor</p>
+<p>local，用于查询本地的object数据库。</p>
+</li>
+<li>
+<p>swift-object-expirer</p>
+</li>
+<li>swift-object-info</li>
+<li>swift-object-replicator</li>
+<li>swift-object-server</li>
+<li>swift-object-updater</li>
+<li>swift-oldies</li>
+<li>swift-orphans</li>
+<li>
+<p>swift-proxy-server</p>
+<p>server，默认run在8080端口上。</p>
+</li>
+<li>
+<p>swift-recon</p>
+</li>
+<li>swift-recon-cron</li>
+<li>
+<p>swift-ring-builder</p>
+<p>建Ring命令，它与swift/common/ring/下的文件一起实现ring文件创建，添加，平衡等操作。swift-ring-builder中主要的功能实现就是在Commands类中，比如default(),create(),add(),rebalance()等。然后main方法会根据你提供的相应参数，来提供执行相应的方法，然后其中的方法会调用/swift/common/ring/下的builder.py中相应的方法最终实现相应的操作。</p>
+<p>当我们通过create创建account.builder文件的时候，commond == argv[2] 也就是create 然后执行create来创建account.builder。之后的操作，只要是存在account.builder文件，就会打开这个文件，生产builder实例，来进行相应的操作。</p>
+<p>用法：</p>
+<pre><code>swift-ring-builder &lt;builder_file&gt; create &lt;part_power&gt; \
+    &lt;replicas&gt; &lt;min_part_hours&gt;
+</code></pre>
+<p>一个devices上会有2 ^ &lt; part_power &gt;个partitions。每个Partition会有&lt; replicas &gt;个副本（不包括它本身）。 &lt; min_part_hours &gt;表示在这个时间段内，partition不能被移动两次，用于限制因为rebalance带来的太多的磁盘IO。 </p>
+<p>其中的default方法是显示当前的builder信息。可以用来在rebalance之前检查add的device 。</p>
+<p>其中rebalance是最重要的方法，当中会涉及到/swift/common/ring下的ring.py builder.py utils.py文件，涉及到了一致性哈希算法和策略的实现。   Attempts to rebalance the ring by reassigning partitions that haven't been recently reassigned. 这句话应该是指前面的min_part_hours参数，短时间内partition不会被再次移动。</p>
+<p>rebalance之后要重启动swift才生效。</p>
+<p>swift-ring-builder::rebalance():</p>
+<ol>
+<li>
+<p>当调用add_dev,set_dev_weight,remove_dev，dev_changed会变成True，默认是False。</p>
+</li>
+<li>
+<p>parts, balance = builder.rebalance()，取得新的partition数目和balance值(平衡度)，如果新的平衡度和老的平衡度（获取平衡度的函数是get_balance，如果平衡度是5%，返回5。0是最平衡，100最差）的差的绝对值在1%，就不会重新分配。否则就产生新的Ring文件。现在只需关注builder.rebalance()。当rebalance后，平衡度大于5%时，会提醒你得等min_part_hours后，才能再次rebalance，可能是因为太多的partition需要移动，但上次已经移动过的短时间内又不能移，所以让用户过了min_part_hours小时后再移动。</p>
+</li>
+</ol>
+<p>RingBuilder::rebalance():</p>
+<ol>
+<li>
+<p>用于为device重新分配partition，根据权重，不同的zone，最近一次的分配情况，估计是上次move过的partition短时间内不能再分配。</p>
+</li>
+<li>
+<p>主要的代码：</p>
+<pre><code>reassign_parts = self._gather_reassign_parts()
+self._reassign_parts(reassign_parts)
+</code></pre>
+</li>
+<li>
+<p>RingBuilder::_gather_reassign_parts()</p>
+<p>Returns a list of (partition, replicas) pairs to be reassigned by gathering from removed devices, insufficiently-far-apart replicas, and overweight drives. 回收的partition来自删除的device，远不充分的replicas（在cluster里不够均匀展开，比如一个devices里有两份相同的replicas），以及过载的drivers。</p>
+</li>
+<li>
+<p>RingBuilder::_reassign_parts()</p>
+<p>partition的副本会尽可能展开：不同的zone最好，其次是同一zone里不同的ip/port，最次是相同zone里同一个ip/port里不同的device。</p>
+</li>
+<li>
+<p>Tie Tree</p>
+<pre><code>def build_tier_tree(devices):
+"""
+Construct the tier tree from the zone layout.
+
+The tier tree is a dictionary that maps tiers to their 
+child tiers.
+A synthetic root node of () is generated so that there's 
+one tree, not a forest.
+
+Example:
+
+zone 1 -+---- 192.168.1.1:6000 -+---- device id 0
+|                       |
+|                       +---- device id 1
+|                       |
+|                       +---- device id 2
+|
++---- 192.168.1.2:6000 -+---- device id 3
+                        |
+                        +---- device id 4
+                        |
+                        +---- device id 5
+
+zone 2 -+---- 192.168.2.1:6000 -+---- device id 6
+|                       |
+|                       +---- device id 7
+|                       |
+|                       +---- device id 8
+|
++---- 192.168.2.2:6000 -+---- device id 9
+                        |
+                        +---- device id 10
+                        |
+                        +---- device id 11
+
+The tier tree would look like:
+{
+    (): [(1,), (2,)],
+
+    (1,): [(1, 192.168.1.1:6000),
+            (1, 192.168.1.2:6000)],
+    (2,): [(1, 192.168.2.1:6000),
+            (1, 192.168.2.2:6000)],
+
+    (1, 192.168.1.1:6000): [(1, 192.168.1.1:6000, 0),
+            (1, 192.168.1.1:6000, 1),
+            (1, 192.168.1.1:6000, 2)],
+    (1, 192.168.1.2:6000): [(1, 192.168.1.2:6000, 3),
+            (1, 192.168.1.2:6000, 4),
+            (1, 192.168.1.2:6000, 5)],
+    (2, 192.168.2.1:6000): [(1, 192.168.2.1:6000, 6),
+            (1, 192.168.2.1:6000, 7),
+            (1, 192.168.2.1:6000, 8)],
+    (2, 192.168.2.2:6000): [(1, 192.168.2.2:6000, 9),
+            (1, 192.168.2.2:6000, 10),
+            (1, 192.168.2.2:6000, 11)],
+}
+
+:devices: device dicts from which to generate the tree
+:returns: tier tree
+</code></pre>
+</li>
+<li></li>
+</ol>
+</li>
+<li>
+<p>swift-temp-url</p>
+</li>
+</ol>
+</li>
+<li>
+<p>proxy-server工作流程</p>
+<ol>
+<li>
+<p>config</p>
+<pre><code>[pipeline:main]
+pipeline = catch_errors healthcheck cache ratelimit \
+    authtoken keystoneauth proxy-logging proxy-server
+</code></pre>
+</li>
+<li>
+<p>catch_errors</p>
+<p>setup.py</p>
+<pre><code>swift.common.middleware.catch_errors:filter_factory
+</code></pre>
+<p>简单调用下级，遇到Exception或者Timeout都handle一下，报错。</p>
+</li>
+<li>
+<p>healthcheck</p>
+<p>setup.py</p>
+<pre><code>swift.common.middleware.healthcheck:filter_factory
+</code></pre>
+<p>If the path is /healthcheck, it will respond with "OK" in the body</p>
+</li>
+<li>
+<p>cache </p>
+<pre><code>memcache=swift.common.middleware.memcache:filter_factory
+
+self.memcache = MemcacheRing(
+[s.strip() for s in self.memcache_servers.split(',') if s.strip()],
+allow_pickle=(serialization_format == 0),
+allow_unpickle=(serialization_format &lt;= 1))
+
+env['swift.cache'] = self.memcache
+</code></pre>
+<p>然后调用下级命令</p>
+</li>
+<li>
+<p>ratelimit</p>
+<p>限速，计算等待时间，太长则返回限速</p>
+</li>
+<li>
+<p>authtoken </p>
+</li>
+<li>
+<p>keystoneauth </p>
+<p>keystone验证</p>
+</li>
+<li>
+<p>proxy-logging </p>
+</li>
+<li>
+<p>proxy-server</p>
+<p>根据req的找到合适的controller和mothod，调用之。controller包括proxy-server下面的account/container/obj。</p>
+</li>
+</ol>
+</li>
+<li>
+<p>功能结构图</p>
+<p>找了张结构脑图：<a href="http://static.oschina.net/uploads/space/2012/1127/165436_pwhI_243681.png">原图</a></p>
+<p><img alt="Swift 结构" src="pic/swift-arch.png" /></p>
+<p>Swift源码大致可以分为6块</p>
+<ol>
+<li>
+<p>物理节点的管理</p>
+<p>主要包括物理节点的添加，删除，ring文件，builder文件生成，重平衡，核心算法与数据结构。</p>
+</li>
+<li>
+<p>请求与处理</p>
+<p>各种服务处理请求的模型，都使用线程池来处理并发请求，一致性的服务也使用了固定的daemon模型。</p>
+</li>
+<li>
+<p>文件操作</p>
+<p>文件的操作，具体的逻辑。</p>
+</li>
+<li>
+<p>文件管理</p>
+<p>account和container概念，类似于用户与文件夹的概念（但是不是这个概念）。</p>
+</li>
+<li>
+<p>认证与鉴权</p>
+<p>认证的程序依靠keystone中间件，而鉴权独立到swift中，真正的鉴权发生在具体操作之前。认证包括：1. client向keystone请求token(根据用户名/密码/tenant)，2. client向keystone请求验证token是否合法。前者返回的token会被缓存，所以client可以直接用token去向keystone验证，只要这个token没有过期。</p>
+<p>认证代码分析???</p>
+<p>认证发生在鉴权之前，认证的log可以从keystone的log里看到，如果在KeystoneAuth类的__call__函数Using Identity之后加两秒的sleep，会看到认证发生后，才有鉴权。</p>
+<p>鉴权由authswift完成，就是keystoneauth.py。传进__call__的env参数如下：</p>
+<pre><code>'HTTP_X_TENANT_NAME': u'service'
+'HTTP_X_ROLE': u'admin'
+'PATH_INFO': '/v1/AUTH_6fd83c762a9548b5a4ca25b93798d49b'
+'HTTP_X_USER_ID': u'21511af5a5484e3295eac929c8d95e5f'
+'HTTP_X_AUTH_TOKEN': '01bd4f2d0de748b583786afa4c3dca87'
+</code></pre>
+<p>keystoneauth.py解析之后：</p>
+<pre><code>{
+    'roles': [u'admin'], 
+    'user': u'glance', 
+    'tenant': (u'6fd83c762a9548b5a4ca25b93798d49b', u'service')
+}
+</code></pre>
+<p>authorize方法会通过env传给proxy-server，然后被回调：</p>
+<pre><code>resp = req.environ['swift.authorize'](req)
+</code></pre>
+<p>鉴权之后，会调用controller，比如:</p>
+<p>stat命令是调用AccountController的HEAD方法。来处理请求。</p>
+<pre><code>HEAD /v1/AUTH_6fd83c762a9548b5a4ca25b93798d49b \
+    HTTP/1.0 204 - - 01bd4f2d0de748b583786afa4c3dca87
+</code></pre>
+<p>post一个container的命令是ContainerController POST+PUT两次过程。</p>
+<pre><code>POST /v1/AUTH_3d2d6cdf234d4abda509a329682dfb92/testDir 404
+PUT /v1/AUTH_3d2d6cdf234d4abda509a329682dfb92/testDir 201
+</code></pre>
+<p>upload一个object的命令是ContainerController PUT + ObjectController HEAD+PUT三次过程。</p>
+<pre><code>PUT /v1/AUTH_3d2d6cdf234d4abda509a329682dfb92/testDir 202
+HEAD /v1/AUTH_3d2d6cdf234d4abda509a329682dfb92/testDir/i.img 404
+PUT /v1/AUTH_3d2d6cdf234d4abda509a329682dfb92/testDir/i.img 201
+</code></pre>
+</li>
+<li>
+<p>服务管理</p>
+<p>统一启动服务，管理服务，manager功能。</p>
+</li>
+</ol>
+</li>
+<li>
+<p>Ring和一致性哈希算法</p>
+<ol>
+<li>
+<p>参考：http://blog.csdn.net/sparkliang/article/details/5279393</p>
+<p>swift使用了一致性哈希算法（一种主流的分布式哈希算法，Distributed Hash Table, DHT)。</p>
+<p>普通的哈希算法（一般是对象的哈希对物理结点总数取模，就可以将对象映射到相应的物理结点上）存在这样的问题：</p>
+<ol>
+<li>可能有的物理结点分配的多，有的物理结点分配的少，数据分布的不平均</li>
+<li>如果有一台新物理结点加进来，可能需要从其他很多结点往新的移动数据，抖动太大</li>
+</ol>
+<p>所以这时候出现了一致性哈希算法，其核心思想是：</p>
+<ol>
+<li>将哈希空间可看作一个环（Ring).</li>
+<li>首先求出设备节点（就是一块硬盘）的哈希，这样设备的哈希可以在Ring就是一个点</li>
+<li>然后就可以再将数据的哈希按顺时针映射到Ring上最近的点，这要的话，每个设备节点只需要处理落在它和它的前驱节点之间的数据</li>
+<li>添加新设备结点时，新设备结点的哈希又在Ring映射了一个点，这样只需要将离它最近的数据迁移，抖动小</li>
+<li>可将物理结点再划分更小的虚拟结点以平衡不同性能间物理机器的权重。有的设备节点的硬盘大比如说200G，有的设备节点硬盘小比较100G，所以我们可以在物理节点上面再抽象一个虚拟结点以分担其权重。注意：可理解成虚拟结点是所有这些之上的抽象（ 硬盘(disk drive)，一个server，一个机架(cabinet)，一个交换机(switch),甚至是一个数据中心(datacenter)</li>
+<li>上面第4）步，Ring上直接映射虚拟结点的哈希与对象的哈希，虽然抖动小，但毕竟还得移动数据，所以我们再他们的中间再抽象一个数据分区(Partition)的概念，比如说Ring上有S个虚拟结点，将其划分成Q个等份，每个等份称为一个数据分区(Partition)，并且满足Q&gt;&gt;S，则每个虚拟节点对应的分区数PartitionNum=Q/S,这样的话，就不需要移动数据了，直接将Partition的哈希在新结点重新映射就行了。(Zone -&gt; Device Node -&gt; Virtual Node -&gt; Partition -&gt; Object)</li>
+</ol>
+<p>所有的数据需要冗余备份多份（replica)，一般replica＝3，因为虚拟节点本来就是环上的点，所以备份时，只需要再将该虚拟节点上的数据同步到它顺时针之后的两个虚拟结点即可。</p>
+<p>但是进行数据冗余备份的时候，我们也应该考虑地区的分布，所以我们可以在虚拟结点中再引入一个分区（Zone)的字段，这个字段由初始建Ring时指定，即数据只能按时针replica到具有不同Zone值的虚拟结点上(通过linux里的rsync命令同步，这样同时该虚拟结点还能检测与它通信的结点的心跳）。</p>
+<p>Swift中有三种Ring, accounts, containers, objects都有各自的环。</p>
+<ol>
+<li>Objects, 就是对象了，Swift是分布式对象系统，不同于HDFSg一样的分布式文件系统（文件系统需支持标准的文件接口如NFS，Swift只能用它自己的REST cliet)</li>
+<li>Containers, Objects的list, 类似于S3里的桶的概念</li>
+<li>Accounts, 是上在Containers的list</li>
+</ol>
+<p>抽象成三个Ring的目的是不至于让一个环太大（因为环要直接放到内存里的，不能内存溢出哦）。上面3个环分别都有对应的Object Server, Container Server, Account Server三个进程维护着3个数据库，Proxy Server在有数据查询或存储请求时，再请求这三个服务，它们返回应该上哪个物理结点去管理数据，然后Proxy Server就直接和这个物理结点打交道存储数据了，存储完了，还要更新3个服务里的元数据。</p>
+</li>
+<li>
+<p>参考：http://blog.csdn.net/chen77716/article/details/5949166</p>
+<p>哈希一致性算法：
+一致性：在增减Node的时候不至于引起HashTable的剧烈变化。</p>
+<p>三个指标：</p>
+<ol>
+<li>平衡性(Balance)：就是指哈希算法要均匀分布，不能有明显的映射规律，这对一般的哈希实现也是必须的</li>
+<li>单调性(Monotonicity)：就是指有新节点加入时，已经存在的映射关系不能发生变化</li>
+<li>分散性(Spread)：就是避免不同的内容映射到相同的位置和相同的内容映射到不同的位置</li>
+</ol>
+<p>虚节点的意义：</p>
+<ol>
+<li>
+<p>使因为实际节点少而导致大片未被映射的区别有虚节点去填充，从而使实节点有了处理本不属于自己区间的Key。均匀化。</p>
+</li>
+<li>
+<p>我们知道一致性哈希算法可以很好的解决增加或删除节点时引起的系统震荡问题。采用虚拟节点后，平均的将增删节点产生的震荡分配到其他节点上。(http://maoyidao.iteye.com/blog/1147875 测试结果)</p>
+</li>
+<li>
+<p>移除节点时，如果是节点信息被持久化存储，则需要将删除节点中的key迁移到其他节点中（持久化存储通常有副本），迁移时服务器的定位方式与问题（2）类似；如果是与memcached类似的缓存系统，则只需更新（vnode-server）的映射关系，从中删除被移除节点对应的vnode。增加节点时，为了负载均衡，需要将其他节点上的部分key迁移到新节点上（在满足一致性hash的基础上），同时更新（vnode – server）的映射关系。（一致性hash仿真的源码：http://blog.chinaunix.net/uid-20196318-id-3013797.html）</p>
+</li>
+</ol>
+<p>虚节点是如何产生的呢？也非常简单，就是在每个Server加个后缀，在做MD5哈希，取其32位。</p>
+</li>
+<li>
+<p>参考：http://blog.csdn.net/zzcase/article/details/6709961</p>
+<p>Hash一致性算法的代码实现：</p>
+<p>Code1：ring1.py，测试MD5算法的Hash平衡性。</p>
+<pre><code>from hashlib import md5
+from struct import unpack_from
+from time import time
+
+NODE_COUNT = 100
+DATA_ID_COUNT = 10000000
+
+begin = time()
+node_counts = [0] * NODE_COUNT
+for data_id in xrange(DATA_ID_COUNT):
+    data_id = str(data_id)
+    hsh = unpack_from('&gt;I', md5(data_id).digest())[0]
+    node_id = hsh % NODE_COUNT
+    node_counts[node_id] += 1
+
+desired_count = DATA_ID_COUNT / NODE_COUNT
+print '%d: Desired data ids per node' % desired_count
+max_count = max(node_counts)
+over = 100.0 * (max_count - desired_count) / desired_count
+print '%d: Most data ids on one node, %.02f%% over' % (max_count, over)
+
+min_count = min(node_counts)
+under = 100.0 * (desired_count - min_count) / desired_count
+print '%d: Least data ids on one node,%.02f%% under' % (min_count, under)
+print '%d seconds pass...' % (time() - begin)
+</code></pre>
+<p>输出：</p>
+<pre><code>100000: Desired data ids per node
+100695: Most data ids on one node, 0.69% over
+99073: Least data ids on one node,0.93% under
+15 seconds pass...
+</code></pre>
+<p>注释：</p>
+<ol>
+<li>
+<p>md5(data_id).digest()是把data_id的string值变成hash码。类同：</p>
+<pre><code>&gt;&gt;&gt; m = hashlib.md5()
+&gt;&gt;&gt; m.update(str(1))
+&gt;&gt;&gt; m.digest()
+'\xc4\xcaB8\xa0\xb9#\x82\r\xccP\x9aou\x84\x9b'
+&gt;&gt;&gt; md5(str(1)).digest()
+'\xc4\xcaB8\xa0\xb9#\x82\r\xccP\x9aou\x84\x9b'
+</code></pre>
+</li>
+<li>
+<p>unpack_from用于解开一段pack过的保护C数据结构的缓存区。"&gt;I"中的"&gt;"表示BigEndian，"I"标识无符号整数，help(struct)可以查到。</p>
+<pre><code>&gt;&gt;&gt; unpack_from("&gt;I", md5(str(1)).digest())
+(3301589560,)
+</code></pre>
+</li>
+<li>
+<p>node_counts list用于统计每个Node上映射到的Data的个数。</p>
+</li>
+<li>
+<p>这段代码的意思是：100个Node，0-10000000个数值。把0-10000000这么多数字变成字符串，用md5算法把这些字符串处理成不重复的128-bit哈希值，也就是16Byte。然后用unpack把这个hash value按C语言，大端无符号整数存储方式读取出来，得到一个大数。然后把这个数字对Node数取余映射。然后统计出Node上最多的data数超平均值百分之多少？最少的少于平均值百分之多少？</p>
+</li>
+</ol>
+<p>结论：hash结果比较均匀， bucket在平均值上下1%之间。</p>
+<p>Code2：ring2_0.py，测试非Hash一致性算法的单调性（一致性）</p>
+<pre><code>from hashlib import md5  
+from struct import unpack_from  
+from time import time
+
+NODE_COUNT = 100  
+NEW_NODE_COUNT = 101  
+DATA_ID_COUNT = 10000000
+
+begin = time()  
+moved_ids = 0  
+for data_id in xrange(DATA_ID_COUNT):  
+    data_id = str(data_id)  
+    hsh = unpack_from('&gt;I', md5(data_id).digest())[0]  
+    node_id = hsh % NODE_COUNT  
+    new_node_id = hsh % NEW_NODE_COUNT  
+    if node_id != new_node_id:  
+        moved_ids += 1  
+percent_moved = 100.0 * moved_ids / DATA_ID_COUNT  
+print '%d ids moved, %.02f%%' % (moved_ids, percent_moved)  
+print '%d seconds pass...' % (time() - begin)
+</code></pre>
+<p>结果：</p>
+<pre><code>9900989 ids moved, 99.01%
+16 seconds pass...
+</code></pre>
+<p>结论：当增加1一个Bucket时，造成hash结果剧烈抖动(99%的结果和原来不同)。这很不理想。(以下Bucket统称为node)</p>
+<p>Code3：ring2_1.py，测试无虚结点的Hash一致性算法的单调性（一致性）</p>
+<pre><code>from bisect import bisect_left
+from hashlib import md5
+from struct import unpack_from
+from time import time
+
+NODE_COUNT = 100
+NEW_NODE_COUNT = 101
+DATA_ID_COUNT = 10000000
+
+begin = time()
+
+node_range_starts = []
+for node_id in xrange(NODE_COUNT):#(1)
+    node_range_starts.append(DATA_ID_COUNT / NODE_COUNT * node_id)
+
+new_node_range_starts = []
+for new_node_id in xrange(NEW_NODE_COUNT): #(2)
+    new_node_range_starts.append(DATA_ID_COUNT / NEW_NODE_COUNT * new_node_id)
+
+moved_ids = 0
+for data_id in xrange(DATA_ID_COUNT):
+    data_id = str(data_id)
+    hsh = unpack_from('&gt;I', md5(str(data_id)).digest())[0]
+    node_id = bisect_left(node_range_starts, hsh % DATA_ID_COUNT) % NODE_COUNT #(3)
+    new_node_id = bisect_left(new_node_range_starts, hsh % DATA_ID_COUNT) % NEW_NODE_COUNT #(4)
+    if node_id != new_node_id:
+        moved_ids += 1
+percent_moved = 100.0 * moved_ids / DATA_ID_COUNT
+print '%d ids moved, %.02f%%' % (moved_ids, percent_moved)
+print '%d seconds pass ... ' % (time() - begin)
+</code></pre>
+<p>结果：</p>
+<pre><code>4901707 ids moved, 49.02%
+25 seconds pass ...
+</code></pre>
+<p>注释：</p>
+<ol>
+<li>
+<p>#(1)中把[1,100]的node编号扩展到[1,10^7]空间中去。即原空间步长为1，新空间步长为10^5。</p>
+</li>
+<li>
+<p>#(2)中类似，是把[1,101]的node扩展到[1,10^7]空间。因此步长比#(1)的小了一点。正因为小了这么一点点(将近900)，累加效应后，直接导致后面将近50%的映射发生变化。</p>
+</li>
+<li>
+<p>#(3)在node_range_starts空间中，找到hsh % DATA_ID_COUNT位置。hsh已经是打散的均匀值，取模是为了让结果均匀落在[1,10^7]空间。bisect_left函数在这里比较重要，当然也非常耗时。bisect_left的作用是“对一个排序好的队列，返回新加入的参数插入队列的位置”，这样就找到了hsh % DATA_ID_COUNT的值所应该占据的range，接下来对NODE_COUNT取余是为了如果插入队列最后，就映射到最前面（Ring）。Range和node对应，比如落在[1,10^5]内的就算是node0，[10^5，2*10^5]就是node1，类推。因此前面两次hash运算失去了意义(相比改进后的ring2_3.py而言)。</p>
+</li>
+<li>
+<p>#(4)和#(3)类同，不赘述。只是步长小了900左右。</p>
+</li>
+</ol>
+<p>结论：50%的变化比起ring2_0.py会好一些，但仍然不能接受。</p>
+<p>Code4：ring2_2.py，添加虚结点，测试Hash一致性算法的单调性（一致性）</p>
+<pre><code>from bisect import bisect_left
+from hashlib import md5
+from struct import unpack_from
+from time import time
+
+NODE_COUNT = 100
+DATA_ID_COUNT = 10000000
+VNODE_COUNT = 1000
+
+begin = time()
+vnode_range_starts = []
+vnode2node = []
+for vnode_id in xrange(VNODE_COUNT):
+    vnode_range_starts.append(DATA_ID_COUNT / 
+                              VNODE_COUNT * vnode_id)#(1)
+    vnode2node.append(vnode_id % NODE_COUNT) #(2)
+new_vnode2node = list(vnode2node)
+new_node_id = NODE_COUNT
+NEW_NODE_COUNT = NODE_COUNT + 1
+vnodes_to_reassign = VNODE_COUNT / NEW_NODE_COUNT#(3)
+print 'vnodes_to_reassign is %d' % vnodes_to_reassign
+
+while vnodes_to_reassign &gt; 0:  #(3)
+    for node_to_take_from in xrange(NODE_COUNT):
+        for vnode_id, node_id in enumerate(new_vnode2node):
+            if node_id == node_to_take_from:
+                new_vnode2node[vnode_id] = new_node_id
+                vnodes_to_reassign -= 1
+                if vnodes_to_reassign &lt;= 0:
+                    break
+        if vnodes_to_reassign &lt;= 0:
+            break
+
+moved_ids = 0
+for data_id in xrange(DATA_ID_COUNT):
+    data_id = str(data_id)
+    hsh = unpack_from('&gt;I', md5(str(data_id)).digest())[0]
+    vnode_id = bisect_left(vnode_range_starts, hsh % DATA_ID_COUNT) % VNODE_COUNT#(4)
+    node_id = vnode2node[vnode_id]
+    new_node_id = new_vnode2node[vnode_id]
+    if node_id != new_node_id:
+        moved_ids += 1
+percent_moved = 100.0 * moved_ids / DATA_ID_COUNT
+print '%d ids moved, %.02f%%' % (moved_ids, percent_moved)
+print '%d seconds pass ...' % (time() - begin)
+</code></pre>
+<p>结果：</p>
+<pre><code>90108 ids moved, 0.90%
+23 seconds pass ...
+</code></pre>
+<p>注释：
+1.  正如ring2_1.py对[1,10^7]空间分为100份。ring2_2.py引入虚结点的概念进一步细分，即分为1000份。如果这里只是类似ring2_1.py，变动区别于1000和1001，那就不用再细表了。然而不仅仅如此。</p>
+<ol>
+<li>
+<p>先说明一个问题。[1,10^7]空间未来会扩充到[1,2^128]（准确的上限不确定，默认是2^114）。1000个虚结点未来会扩充到2^18。这样来看，暂不提效率，依靠变化虚结点数目减少映射变动是非常有限的。</p>
+</li>
+<li>
+<p>ring2_2.py中解耦了对node的依赖，即不以node数目的变动而影响映射关系。映射关系更依赖于vnode数目，但是vnode相对稳定。vnode会对应到不同的node。（参照0.3小节）</p>
+<ol>
+<li>
+<p>#(1) vnode_range_starts对[1,10^7]空间划分为1000份。</p>
+</li>
+<li>
+<p>#(2) vnode2node是vnode和node之间的对应关系。注意这个list初始化时比较有规律，之后变更“对应”时会用到。</p>
+</li>
+<li>
+<p>#(3) vnodes_to_reassign反映node变动。根据node的变动调整vnode和node的对应关系。vnode只变动有限个，这个数目才真正影响到结果中0.90%的映射变动</p>
+</li>
+<li>
+<p>#(4)注意这里被查询的list为vnode_range_starts。</p>
+</li>
+</ol>
+</li>
+<li>
+<p>vnodes_to_reassign的数值表示如果新添加一个Node，需要映射到新Node上的虚拟节点的数目。</p>
+</li>
+<li>
+<p>代码中的while循环部分，是在创建新的虚拟节点和物理节点之间的对应表。原来的对应关系是简单的取余对应，所以每个物理节点的虚拟节点都均匀分布在Ring上。新的对应关系，会从物理Node0的10个虚拟节点里，分9个（vnodes_to_reassign）给新加入的Node100。这样并不合理，因为新的对应关系中，Node0只剩下1个虚拟节点了，如果在加入一个节点，Node0的虚拟节点就分完了，Node0会闲置。应该从每一个Node的虚拟节点里分一个给100才对，但是这样似乎太复杂了。本文只是举个例子证明这样的抖动小很多。</p>
+</li>
+</ol>
+<p>结论： 引入虚拟节点后，抖动小很多。</p>
+<p>Code4：ring2_3.py，重构ring_2.py。</p>
+<p>把原来Object到虚结点之间Ring Map的方式（其实就是除法）改成取余Map，代码简单点。</p>
+<pre><code>print vnode_range_starts # [0, 10000, ..., 9980000, 9990000]
+print hsh % DATA_ID_COUNT # 6326916
+print bisect_left(vnode_range_starts, hsh % DATA_ID_COUNT) # 633
+print bisect_left(vnode_range_starts, hsh % DATA_ID_COUNT) % VNODE_COUNT# 633
+print hsh % VNODE_COUNT # 916
+</code></pre>
+<p>代码：</p>
+<pre><code>from struct import unpack_from
+from hashlib import md5
+from time import time
+
+NODE_COUNT = 100
+DATA_ID_COUNT = 10000000
+VNODE_COUNT = 1000
+
+begin = time()
+vnode2node = []
+for vnode_id in xrange(VNODE_COUNT):
+    vnode2node.append(vnode_id % NODE_COUNT)
+new_vnode2node = list(vnode2node)
+new_node_id = NODE_COUNT
+vnodes_to_assign = VNODE_COUNT / (NODE_COUNT + 1)
+while vnodes_to_assign &gt; 0:
+    for node_to_take_from in xrange(NODE_COUNT):
+        for vnode_id, node_id in enumerate(vnode2node):
+            if node_id == node_to_take_from:
+                vnode2node[vnode_id] = new_node_id
+                vnodes_to_assign -= 1
+                if vnodes_to_assign &lt;= 0:
+                    break
+        if vnodes_to_assign &lt;= 0:
+            break
+moved_id = 0
+for data_id in xrange(DATA_ID_COUNT):
+    data_id = str(data_id)
+    hsh = unpack_from('&gt;I', md5(str(data_id)).digest())[0]
+    vnode_id = hsh % VNODE_COUNT#(1)
+    node_id = vnode2node[vnode_id]
+    new_node_id = new_vnode2node[vnode_id]
+    if node_id != new_node_id:
+        moved_id += 1
+percent_moved = 100.0 * moved_id / DATA_ID_COUNT
+print '%d ids moved, %.02f%%' % (moved_id, percent_moved)
+print '%d seconds pass ...' % (time() - begin)
+</code></pre>
+<p>结果：</p>
+<pre><code>90369 ids moved, 0.90%
+16 seconds pass ...
+</code></pre>
+<p>至此，已经构建好了一致性哈希ring的原型。但存在一个问题。100个结点对应着1000个虚结点。结点变动时，虚结点和结点的对应关系会发生变化。当100个结点扩张到1001个时，会发生什么情况？新增的结点数目会挤兑掉原先的结点数目！原因就在于1000个虚结点是固定的，不变化的。如果再扩容1000个虚结点-&gt;更改虚结点和实结点之间的对应关系-&gt;调整数据，这似乎又回到ring2_0.py的老套路。这里做一些改动以更接近真实情况。</p>
+<p>首先是vnode，以后改称为partition。因为partition数量很少会变动，所以需要充分估计到系统预期的规模。假如不会超过6000个结点，那么虚结点可以设置为实结点的100倍。这样，当虚结点需要调整的时候，最多只会影响到1%的数据。</p>
+<p>在计算机中，数字取2的幂阶会有一些好处。比如除法只需要移相应的位就可以了。所以ring3_0.py中，结点数为65536(2^16)，partition数为8388608(2^23)个。</p>
+<p>Code5：ring3_0.py</p>
+<p>说明：</p>
+<ol>
+<li>
+<p>代码比较简单，part2node是node和partition的对应关系，node_counts记录着每个node中有多少个数据映射进来。</p>
+</li>
+<li>
+<p>gholt特意提到系统开销：2Byte存储16位对应结点id， 600多万个partition只对应占用12MB的内存。gholt还提到ring3_0.py结果出现10%波动的问题（就是说数据到Partition的映射均匀性不好）。主要是因为数据空间(10^8相对于partition数(约8*10^6)太小了。他尝试过更大的数据空间空间，比如10^9个数据，对应于8*10^6的partition，耗时6个小时。-_-!</p>
+</li>
+<li>
+<p>md5出来是一个32bit的数，所以右移9位（PARTITION_SHIFT = 32 - PARTITION_POWER ），Map到Partition。</p>
+</li>
+<li>
+<p>array是类型一致的list。'H'标识array里的元素均为C语言中的unsigned integer类型，每个元素占用的最小Byte为2。</p>
+</li>
+</ol>
+<p>Code：</p>
+<pre><code>from array import array  
+from hashlib import md5  
+from struct import unpack_from  
+from time import time
+
+PARTITION_POWER = 23  
+PARTITION_SHIFT = 32 - PARTITION_POWER  
+NODE_COUNT = 65536  
+DATA_ID_COUNT = 100000000
+
+begin = time()  
+part2node = array('H')  
+for part in xrange(2 ** PARTITION_POWER):  
+    part2node.append(part % NODE_COUNT)  
+node_counts = [0] * NODE_COUNT  
+for data_id in xrange(DATA_ID_COUNT):  
+    data_id = str(data_id)  
+    part = unpack_from('&gt;I',  
+                     md5(str(data_id)).digest())[0] &gt;&gt; PARTITION_SHIFT  
+    node_id = part2node[part]  
+    node_counts[node_id] += 1  
+desired_count = DATA_ID_COUNT / NODE_COUNT
+
+print '%d: Desier data ids per node' % desired_count  
+max_count = max(node_counts)  
+over = 100.0 * (max_count - desired_count) / desired_count  
+print '%d Most data ids on one node, %.02f%% over' % (max_count, over)  
+min_count = min(node_counts)  
+under = 100.0 * (desired_count - min_count) / desired_count  
+print '%d Least data ids on one node, %.02f%% under' % (min_count, under)  
+print '%d seconds pass ...' % (time() - begin)
+</code></pre>
+<p>结果：</p>
+<pre><code>1525: Desier data ids per node
+1683 Most data ids on one node, 10.36% over
+1360 Least data ids on one node, 10.82% under
+203 seconds pass ...
+</code></pre>
+<p>Code6：ring4_0.py</p>
+<p>说明：</p>
+<ol>
+<li>
+<p>ring3_0.py已经有点接近现实中一致性哈希ring了，ring4_0.py中将加入replica的特性。</p>
+</li>
+<li>
+<p>#(1) node_ids记录的是3个replica存放的node id。part2node[part]是根据对应的partition id 找到对应的node id。#(2)处循环3次（貌似只有两次），依次为数据的replica安排连续的partition。之后改变相应的记录，node_ids.和node_counts。</p>
+</li>
+<li>
+<p>ring4_0.py看起来还不错，1%的波动。可是仍然会有两个问题：</p>
+<ol>
+<li>
+<p>#(2)处是分配连续的partition。#(3)处初始化时是有规律的。这会在一些情况下使部分数据表现很糟糕。比如这部分数据被映射到node x的partition N上，node x频繁宕机，而总是partition N上的数据需要进行复制。解决也相对容易： part2node初始化时进行随机打乱，partition N和node x不在存在某种联系。</p>
+</li>
+<li>
+<p>数据安全的问题。假如replica所在的partiton都分布在同一个机架上。机架掉电，这会导致所有replica都不可用。因此需要一种机制对故障进行隔离。因此也就引入了zone的概念。</p>
+</li>
+</ol>
+</li>
+</ol>
+<p>Code：</p>
+<pre><code>from array import array
+from struct import unpack_from
+from hashlib import md5
+from time import time
+
+REPLICAS = 3
+PARTITION_POWER = 16
+PARTITION_SHIFT = 32 - PARTITION_POWER
+PARTITION_MAX = 2 ** PARTITION_POWER - 1
+NODE_COUNT = 256
+DATA_ID_COUNT = 10000000
+
+begin = time()
+part2node = array('H')
+for part in xrange(2 ** PARTITION_POWER):
+    part2node.append(part % NODE_COUNT) #(3)
+node_counts = [0] * NODE_COUNT
+for data_id in xrange(DATA_ID_COUNT):
+    data_id = str(data_id)
+    part = unpack_from('&gt;I',
+                     md5(str(data_id)).digest())[0] &gt;&gt; PARTITION_SHIFT
+    node_ids = [part2node[part]] #(1)
+    node_counts[node_ids[0]] += 1
+    for replica in xrange(1, REPLICAS):
+        while part2node[part] in node_ids: #(2)
+            part += 1
+            if part &gt; PARTITION_MAX:
+                part = 0
+        node_ids.append(part2node[part])
+        node_counts[node_ids[-1]] += 1
+desired_count = DATA_ID_COUNT / NODE_COUNT * REPLICAS
+print'%d: Desired data ids per node' % desired_count
+max_count = max(node_counts)
+over = 100.0 * (max_count - desired_count) / desired_count
+print'%d: Most data ids on one node, %.02f%% over' % (max_count, over)
+min_count = min(node_counts)
+under = 100.0 * (desired_count - min_count) / desired_count
+print'%d: Least data ids on one node,%.02f%% under' % (min_count, under)
+print'%d seconds pass ...' % (time() - begin)
+</code></pre>
+<p>结果：</p>
+<pre><code>117186: Desired data ids per node
+118133: Most data ids on one node, 0.81% over
+116093: Least data ids on one node,0.93% under
+36 seconds pass ...
+</code></pre>
+<p>Code7：ring4_1.py</p>
+<p>说明：</p>
+<ol>
+<li>
+<p>#(1) zonelist初始化。引入zone，以解决ring4_0.py问题2。补充，直接用node对zone的个数取余不就完了么，搞这么复杂。[i % ZONE_COUNT for i in NODE_COUNT]</p>
+</li>
+<li>
+<p>#(2) part2node洗牌，打乱顺序，shuffle用于将一个序列打乱排序。解决ring4_0.py问题1。花的时间比较多。</p>
+</li>
+<li>
+<p>#(3) 逐次探查partition位置是否合适，不能在同一个node上，也不能在同一个zone上。此处的and应该改为or。</p>
+</li>
+<li>
+<p>到此，ring的基本功能都已经有了：一致性哈希ring，replica，zone。</p>
+</li>
+</ol>
+<p>Code：</p>
+<pre><code>from array import array
+from struct import unpack_from
+from hashlib import md5
+from time import time
+from random import shuffle
+
+REPLICAS = 3
+PARTITION_POWER = 16
+PARTITION_SHIFT = 32 - 16
+PARTITION_MAX = 2 ** PARTITION_POWER - 1
+NODE_COUNT = 256
+ZONE_COUNT = 16
+DATA_ID_COUNT = 10000000
+
+begin = time()
+node2zone = []
+while len(node2zone) &lt; NODE_COUNT: #(1)
+    zone = 0
+    while zone &lt; ZONE_COUNT and len(node2zone) &lt; NODE_COUNT:
+        node2zone.append(zone)
+        zone += 1
+part2node = array('H')
+for part in xrange(2 ** PARTITION_POWER):
+    part2node.append(part % NODE_COUNT)
+shuffle(part2node)  #(2)
+node_counts = [0] * NODE_COUNT
+zone_counts = [0] * ZONE_COUNT
+for data_id in xrange(DATA_ID_COUNT):
+    data_id = str(data_id)
+    part = unpack_from('&gt;I',
+                     md5(str(data_id)).digest())[0] &gt;&gt; PARTITION_SHIFT
+    node_ids = [part2node[part]]
+    zones = [node2zone[node_ids[0]]]
+    node_counts[node_ids[0]] += 1
+    zone_counts[zones[0]] += 1
+    for replica in xrange(1, REPLICAS):  #(3)
+        while part2node[part] in node_ids and \
+        node2zone[part2node[part]] in zones:
+            part += 1
+            if part &gt; PARTITION_MAX:
+                part = 0
+        node_ids.append(part2node[part])
+        zones.append(node2zone[node_ids[-1]])
+        node_counts[node_ids[-1]] += 1
+        zone_counts[zones[-1]] += 1
+
+desired_count = DATA_ID_COUNT / NODE_COUNT * REPLICAS
+print '%d Desired data ids per node' % desired_count
+max_count = max(node_counts)
+over = 100.0 * (max_count - desired_count) / desired_count
+print '%d: Most data ids on one node, %.02f%% over' % (max_count, over)
+min_count = min(node_counts)
+under = 100.0 * (desired_count - min_count) / desired_count
+print '%d: Least data ids on one node,%.02f%% under' % (min_count, under)
+
+desired_count = DATA_ID_COUNT / ZONE_COUNT * REPLICAS
+print'%d: Desired data ids per zone' % desired_count
+max_count = max(zone_counts)
+over = 100.0 * (max_count - desired_count) / desired_count
+print'%d: Most data ids in one zone, %.02f %% over' % (max_count, over)
+min_count = min(zone_counts)
+under = 100.0 * (desired_count - min_count) / desired_count
+print'%d: Least data ids in one zone, %.02f %%under' % (min_count, under)
+print '%d seconds pass ...' % (time() - begin)
+</code></pre>
+<p>结果：</p>
+<pre><code>117186 Desired data ids per node
+118688: Most data ids on one node, 1.28% over
+115739: Least data ids on one node,1.23% under
+1875000: Desired data ids per zone
+1878794: Most data ids in one zone, 0.20 % over
+1870778: Least data ids in one zone, 0.23 %under
+49 seconds pass ...
+</code></pre>
+<p>Code8：ring4_2.py</p>
+<p>说明：</p>
+<p>ring4_2.py给出类似图<a href="http://blog.csdn.net/zzcase/article/details/6709961">2.1</a>的实现。当然，只是一种实现模型。swift曾经采用过这种模型，但现已废弃。这里权当扩展了解，不感兴趣的请跳到下一Part。Part3将把上述的特性封装成类，加入weight，并简单测试。</p>
+<p>ring4_2.py体现的是一种anchor思想。即：维护一个node的anchor环。每次data都会查找anchor环找到和匹配自己的存储node位置。</p>
+<p>anchor环就是ring4_2.py中的hash2index和index2node。每个数据都在#(2)处查找index，之后到index2node找对应的node。#(1)中的二分查找、hash计算都是比较耗时的。系统开销暂不提，这种实现并不能够均匀分布数据。为使数据分布的更为均匀，每个node都要维护anchor，不断遍历anchor环以查找合适位置。而且，这种情况下replica的管理会非常麻烦。</p>
+<p>空间和时间，计算机中的博弈。ring4_1.py采用的空间换时间，简化了对应关系；而ring4_2.py采用了时间换空间，思路简单，但效果不尽人意。</p>
+<p>这段代码想表达的意思是将node也hash编码放入到Ring中，然后用vnode复制N份（在相邻的位置），然后将data顺时针映射到对应的node。但vnode在相邻的位置就完全没有意义，index就是vnode，可以看到同一个node里的vnode有相同的hash。然后把data通过indextohsh按照二分法插入到vnode中，再通过index2node查到对应的node值。如果按照文中的例子，把vnode相邻放置，会导致除首尾的vnode以外，同一个node中的其余vnode没有任何机会存储东西，形同虚设。只会在需要复制时承担点任务？貌似这也不会。因为复制是care的node和zone，不是vnode。</p>
+<p>Code:</p>
+<pre><code>from bisect import bisect_left
+from hashlib import md5
+from struct import unpack_from
+from time import time
+
+REPLICAS = 3
+NODE_COUNT = 256
+ZONE_COUNT = 16
+DATA_ID_COUNT = 10000000
+VNODE_COUNT = 100
+
+begin = time()
+node2zone = []
+while len(node2zone) &lt; NODE_COUNT:
+    zone = 0
+    while zone &lt; ZONE_COUNT and len(node2zone) &lt; NODE_COUNT:
+        node2zone.append(zone)
+        zone += 1
+hash2index = []
+index2node = []
+for node in xrange(NODE_COUNT):
+    for vnode in xrange(VNODE_COUNT):
+        hsh = unpack_from('&gt;I', md5(str(node)).digest())[0]
+        index = bisect_left(hash2index, hsh)
+        if index &gt; len(hash2index):
+            index = 0
+        hash2index.insert(index, hsh)
+        index2node.insert(index, node)
+node_counts = [0] * NODE_COUNT
+zone_counts = [0] * ZONE_COUNT
+for data_id in xrange(DATA_ID_COUNT):  #(1)
+    data_id = str(data_id)
+    hsh = unpack_from('&gt;I', md5(str(data_id)).digest())[0]
+    index = bisect_left(hash2index, hsh)  #(2)
+    if index &gt;= len(hash2index):
+        index = 0
+    node_ids = [index2node[index]]
+    zones = [node2zone[node_ids[0]]]
+    node_counts[node_ids[0]] += 1
+    zone_counts[zones[0]] += 1
+    for replica in xrange(1, REPLICAS):
+        while index2node[index] in node_ids and node2zone[index2node[index]] in zones:
+            index += 1
+            if index &gt;= len(hash2index):
+                index = 0
+        node_ids.append(index2node[index])
+        zones.append(node2zone[node_ids[-1]])
+        node_counts[node_ids[-1]] += 1
+        zone_counts[zones[-1]] += 1
+desired_count = DATA_ID_COUNT / NODE_COUNT * REPLICAS
+print '%d: Desired data ids per node' % desired_count
+max_count = max(node_counts)
+over = 100.0 * (max_count - desired_count) / desired_count
+print '%d: Most data ids on one node, %.02f%% over' % (max_count, over)
+min_count = min(node_counts)
+under = 100.0 * (desired_count - min_count) / desired_count
+print '%d: Least data ids on one node, %.02f%% under' % (min_count, under)
+
+desired_count = DATA_ID_COUNT / ZONE_COUNT * REPLICAS
+print '%d: Desired data ids per zone' % desired_count
+max_count = max(zone_counts)
+over = 100.0 * (max_count - desired_count) / desired_count
+print '%d: Most data ids on one zone, %.02f%% over' % (max_count, over)
+min_count = min(zone_counts)
+under = 100.0 * (desired_count - min_count) / desired_count
+print '%d: Least data ids on one zone, %.02f%% under' % (min_count, under)
+
+print '%d seconds pass ...' % (time() - begin)
+</code></pre>
+<p>结果：</p>
+<pre><code>117186: Desired data ids per node
+351282: Most data ids on one node, 199.76% over
+15965: Least data ids on one node, 86.38% under
+1875000: Desired data ids per zone
+2248496: Most data ids on one zone, 19.92% over
+1378013: Least data ids on one zone, 26.51% under
+990 seconds pass ...
+</code></pre>
+<p>Code9：ring5_0.py</p>
+<p>说明：</p>
+<ol>
+<li>
+<p>ring5_0.py将前述的特性封装成module，并做简单测试。</p>
+</li>
+<li>
+<p>#(1)zones列表中的元素都是字典</p>
+</li>
+<li>
+<p>#(2)处返回的也是一个元素为字典的列表，列表中的每个元素都对应一个node，每个data对应不同的node。</p>
+</li>
+<li>
+<p>#(3)注意这里是一个set(集合)。set的长度是已经规定好的16.。所以不明白为什么还要计算一遍。</p>
+</li>
+<li>
+<p>gholt认为array转dict比较耗时。实际上最耗时的部分在#(4)，get_nodes需要计算hash值、循环查找，外部还有一个2^16循环。</p>
+</li>
+<li>
+<p>两个while的代码可以简化为：  <br />
+</p>
+<pre><code>nodeList = [{'id':id, 'zone':id % ZONE_COUNT} for id in range(NODE_COUNT)]
+nodes = dict(enumerate(nodeList))
+</code></pre>
+</li>
+<li>
+<p>build_ring时ring实例中只包含一个node表（每一个node的zone，weight），part2node（partition和node的对应关系），replica（副本份数）</p>
+</li>
+</ol>
+<p>Code:</p>
+<pre><code>from array import array
+from hashlib import md5
+from random import shuffle
+from struct import unpack_from
+from time import time
+
+class Ring(object):
+    def __init__(self, nodes, part2node, replicas):
+        self.nodes = nodes
+        self.part2node = part2node
+        self.replicas = replicas
+        partition_power = 1
+        while 2 ** partition_power &lt; len(part2node):
+            partition_power += 1
+        if len(part2node) != 2 ** partition_power:
+            raise Exception("part2node's length is not an exact power of 2")
+        self.partition_shift = 32 - partition_power
+
+    def get_nodes(self, data_id):
+        data_id = str(data_id)
+        part = unpack_from('&gt;I',
+                         md5(data_id).digest())[0] &gt;&gt; self.partition_shift
+        node_ids = [self.part2node[part]]
+        zones = [self.nodes[node_ids[0]]] #(1)
+        for replica in xrange(1, self.replicas):
+            while self.part2node[part] in node_ids and \
+                self.nodes[self.part2node[part]] in zones:
+                part += 1
+                if part &gt;= len(self.part2node):
+                    part = 0
+            node_ids.append(self.part2node[part])
+            zones.append(self.nodes[node_ids[-1]])
+        return [self.nodes[n] for n in node_ids] #(2)
+
+def build_ring(nodes, partition_power, replicas):
+    begin = time()
+    part2node = array('H')
+    for part in xrange(2 ** partition_power):
+        part2node.append(part % len(nodes))
+    shuffle(part2node)
+    ring = Ring(nodes, part2node, replicas)
+    print '%.02fs to build ring' % (time() - begin)
+    return ring
+
+def test_ring(ring):
+    begin = time()
+    DATA_ID_COUNT = 10000000
+    node_counts = {}
+    zone_counts = {}
+    for data_id in xrange(DATA_ID_COUNT): #(4)
+        for node in ring.get_nodes(data_id):
+            node_counts[node['id']] = \
+                node_counts.get(node['id'], 0) + 1
+            zone_counts[node['zone']] = \
+                zone_counts.get(node['zone'], 0) + 1
+    print '%ds to test ring' % (time() - begin)
+
+    desired_count = \
+        DATA_ID_COUNT / len(ring.nodes) * REPLICAS
+    print '%d: Desired data ids per node' % desired_count
+    max_count = max(node_counts.itervalues())
+    over = \
+        100.0 * (max_count - desired_count) / desired_count
+    print '%d: Most data ids on one node,%.02f%% over' % (max_count, over)
+
+    min_count = min(node_counts.itervalues())
+    under = \
+        100.0 * (desired_count - min_count) / desired_count
+    print '%d: Least data ids on one node, %.02f%% under' % (min_count, under)
+
+    zone_count = \
+        len(set(n['zone'] for n in ring.nodes.itervalues()))#(3)
+    desired_count = \
+        DATA_ID_COUNT / zone_count * ring.replicas
+    print '%d: Desired data ids per zone' % desired_count
+    max_count = max(zone_counts.itervalues())
+    over = \
+        100.0 * (max_count - desired_count) / desired_count
+    print '%d: Most data ids in one zone, %.02f%% over' % (max_count, over)
+
+    min_count = min(zone_counts.itervalues())
+    under = \
+        100.0 * (desired_count - min_count) / desired_count
+    print '%d: Least data ids in one zone, %.02f%% under' % (min_count, under)
+
+if __name__ == "__main__":
+    PARTITION_POWER = 16
+    REPLICAS = 3
+    NODE_COUNT = 256
+    ZONE_COUNT = 16
+    nodes = {}
+    while len(nodes) &lt; NODE_COUNT:
+        zone = 0
+        while zone &lt; ZONE_COUNT and len(nodes) &lt; NODE_COUNT:
+            node_id = len(nodes)
+            nodes[node_id] = {'id':node_id, 'zone':zone}
+            zone += 1
+    ring = build_ring(nodes, PARTITION_POWER, REPLICAS)
+    test_ring(ring)
+</code></pre>
+<p>结果：</p>
+<pre><code>0.04s to build ring
+61s to test ring
+117186: Desired data ids per node
+118722: Most data ids on one node,1.31% over
+115775: Least data ids on one node, 1.20% under
+1875000: Desired data ids per zone
+1878154: Most data ids in one zone, 0.17% over
+1869422: Least data ids in one zone, 0.30% under
+</code></pre>
+<p>Code10：ring5_1.py<br />
+</p>
+<p>说明：</p>
+<p>ring5_1.py加入了weight属性。</p>
+<ol>
+<li>
+<p>#(1)根据每个node的weight占总weight和的比例来分配partition，以desired_parts对应的值表示。就是指这个node应该分配多少个partition。</p>
+</li>
+<li>
+<p>#(2) #(3)处代码是比较难理解的部分。#(2)处依次给每个node分配partition，直到desired_parts变为0。#(3)处控制退出。当所有结点都的desired_parts都为0时(实际上为0时也是需要分配partition的)，#(3)使所有结点的desired_parts都为-1，直到2^partition_power循环结束。</p>
+</li>
+<li>
+<p>#(4)node_counts[node[‘id’]]是实际映射到的数据数量，desired是平均时得到的数据数量。</p>
+</li>
+<li>
+<p>gholt谈到曾经测试node使用[1,100]随机的weight值。结果node在7.35%/18.12%范围内波动，zone中node值在0.24%/0.22%之间波动。</p>
+</li>
+</ol>
+<p>Code：</p>
+<pre><code>from array import array
+from hashlib import md5
+from random import shuffle
+from struct import unpack_from
+from time import time
+
+class Ring(object):
+    def __init__(self, nodes, part2node, replicas):
+        self.nodes = nodes
+        self.part2node = part2node
+        self.replicas = replicas
+        partition_power = 1
+        while 2 ** partition_power &lt; len(part2node):
+            partition_power += 1
+        if len(part2node) != 2 ** partition_power:
+            raise Exception("part2node's length is not an exact power of 2")
+        self.partition_shift = 32 - partition_power
+
+    def get_nodes(self, data_id):
+        data_id = str(data_id)
+        part = unpack_from('&gt;I',
+                         md5(data_id).digest())[0] &gt;&gt; self.partition_shift
+        node_ids = [self.part2node[part]]
+        zones = [self.nodes[node_ids[0]]]
+        for replica in xrange(1, self.replicas):
+            while self.part2node[part] in node_ids and \
+                self.nodes[self.part2node[part]] in zones:
+                part += 1
+                if part &gt;= len(self.part2node):
+                    part = 0
+            node_ids.append(self.part2node[part])
+            zones.append(self.nodes[node_ids[-1]])
+        return [self.nodes[n] for n in node_ids]
+
+def build_ring(nodes, partition_power, replicas):
+    begin = time()
+    parts = 2 ** partition_power
+    total_weight = \
+        float(sum(n['weight'] for n in nodes.itervalues()))
+    for node in nodes.itervalues():
+        node['desired_parts'] = \
+            parts / total_weight * node['weight'] #(1)
+    part2node = array('H')
+    for part in xrange(2 ** partition_power):
+        for node in nodes.itervalues(): #(2)
+            if node['desired_parts'] &gt;= 1:
+                node['desired_parts'] -= 1
+                part2node.append(node['id'])
+                break
+        else:
+            for node in nodes.itervalues():  #(3)
+                if node['desired_parts'] &gt;= 0:
+                    node['desired_parts'] -= 1
+                    part2node.append(node['id'])
+                    break
+    shuffle(part2node)
+    ring = Ring(nodes, part2node, replicas)
+    print '%.02f to build ring' % (time() - begin)
+    return ring
+
+def test_ring(ring):
+    begin = time()
+    DATA_ID_COUNT = 10000000
+    node_counts = {}
+    zone_counts = {}
+    for data_id in xrange(DATA_ID_COUNT):
+        for node in ring.get_nodes(data_id):
+            node_counts[node['id']] = \
+                node_counts.get(node['id'], 0) + 1
+            zone_counts[node['zone']] = \
+                zone_counts.get(node['zone'], 0) + 1
+    print '%ds to test ring' % (time() - begin)
+    total_weight = float(sum(n['weight'] for n in ring.nodes.itervalues()))
+    max_over = 0
+    max_under = 0
+    for node in ring.nodes.itervalues():
+        desired = DATA_ID_COUNT * REPLICAS * \
+            node['weight'] / total_weight
+        diff = node_counts[node['id']] – desired #(4)
+        if diff &gt; 0:
+            over = 100.0 * diff / desired
+            if over &gt; max_over:
+                max_over = over
+        else:
+            under = 100.0 * (-diff) / desired
+            if under &gt; max_under:
+                max_under = under
+    print '%.02f%% max node over' % max_over
+    print '%.02f%% max node under' % max_under
+    max_over = 0
+    max_under = 0
+
+    for zone in set(n['zone'] for n in ring.nodes.itervalues()):
+        zone_weight = sum(n['weight'] for n in
+                        ring.nodes.itervalues() if n['zone'] == zone)
+        desired = DATA_ID_COUNT * REPLICAS * \
+            zone_weight / total_weight
+        diff = zone_counts[zone] - desired
+        if diff &gt; 0:
+            over = 100.0 * diff / desired
+            if over &gt; max_over:
+                max_over = over
+        else:
+            under = 100.0 * (-diff) / desired
+            if under &gt; max_under:
+                max_under = under
+    print '%.02f%% max zone over' % max_over
+    print '%.02f%% max zone under' % max_under
+
+if __name__ == '__main__':
+    PARTITION_POWER = 16
+    REPLICAS = 3
+    NODE_COUNT = 256
+    ZONE_COUNT = 16
+    nodes = {}
+    while len(nodes) &lt; NODE_COUNT:
+        zone = 0
+        while zone &lt; ZONE_COUNT and len(nodes) &lt; NODE_COUNT:
+            node_id = len(nodes)
+            nodes[node_id] = {'id':node_id, 'zone':zone,
+                            'weight':1.0 + (node_id % 2)}
+            zone += 1
+    ring = build_ring(nodes, PARTITION_POWER, REPLICAS)
+    test_ring(ring)
+</code></pre>
+<p>结果：</p>
+<pre><code>0.91 to build ring
+88s to test ring
+1.61% max node over
+1.78% max node under
+0.32% max zone over
+0.21% max zone under
+</code></pre>
+</li>
+</ol>
+</li>
+<li>
+<p>Builder文件里存储的内容：</p>
+<pre><code>&gt;&gt;&gt; aDict.keys()
+['version', 'replicas', 'part_power', '_last_part_moves', '_replica2part2dev', '_last_part_gather_start', 'min_part_hours', 'devs', 'devs_changed', 'parts', '_last_part_moves_epoch', '_remove_devs']
+&gt;&gt;&gt; aDict["version"]
+3
+&gt;&gt;&gt; aDict["replicas"]
+3
+&gt;&gt;&gt; aDict["part_power"]
+9
+&gt;&gt;&gt; aDict["devs"]
+[{'parts': 512, 'meta': '', 'weight': 1.0, 'zone': 1, 'device': 'sdb1', 'ip': '127.0.0.1', 'parts_wanted': 0, 'id': 0, 'port': 6012}, {'parts': 512, 'meta': '', 'weight': 1.0, 'zone': 2, 'device': 'sdb1', 'ip': '127.0.0.1', 'parts_wanted': 0, 'port': 6022, 'id': 1}, {'parts': 512, 'meta': '', 'weight': 1.0, 'zone': 3, 'device': 'sdb1', 'ip': '127.0.0.1', 'parts_wanted': 0, 'id': 2, 'port': 6032}]
+&gt;&gt;&gt; aDict["devs_changed"]
+False
+&gt;&gt;&gt; aDict["parts"]
+512
+&gt;&gt;&gt; aDict["min_part_hours"]
+1
+&gt;&gt;&gt; aDict["_last_part_moves"] #一维数组，里面的数字表示该partition上次移动至今的小时数。
+array('B', [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+&gt;&gt;&gt; aDict["_replica2part2dev"] #最外围的三个list表示三个replica，每个replica里有512个part，每个part的值0/1/2代表对应的dev的id。
+[array('H', [2, 2, 1, 2, 0, 1, 1, 0, 0, 2, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 2, 1, 1, 0, 2, 1, 0, 1, 2, 1, 1, 1, 2, 1, 0, 0, 0, 0, 2, 2, 2, 1, 2, 2, 0, 1, 0, 2, 1, 2, 2, 2, 1, 2, 1, 1, 2, 2, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 2, 2, 1, 2, 1, 2, 0, 1, 2, 2, 1, 1, 2, 1, 1, 0, 2, 0, 1, 2, 0, 1, 0, 0, 0, 2, 1, 1, 1, 1, 1, 2, 0, 1, 2, 2, 1, 2, 2, 2, 0, 2, 1, 0, 0, 2, 2, 2, 2, 0, 2, 0, 1, 2, 2, 0, 1, 1, 1, 1, 2, 2, 2, 0, 0, 0, 1, 2, 2, 1, 2, 0, 1, 2, 2, 0, 0, 2, 1, 1, 0, 1, 1, 0, 1, 2, 2, 2, 0, 0, 1, 2, 1, 2, 2, 1, 2, 1, 0, 2, 2, 1, 0, 0, 0, 1, 2, 0, 2, 2, 0, 2, 2, 1, 2, 0, 2, 1, 2, 1, 2, 0, 2, 2, 1, 0, 2, 1, 2, 1, 2, 2, 2, 2, 2, 2, 0, 0, 0, 2, 2, 1, 1, 2, 2, 0, 0, 1, 1, 0, 0, 0, 0, 2, 2, 0, 2, 2, 1, 1, 1, 1, 0, 1, 1, 1, 1, 2, 0, 1, 2, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 2, 0, 1, 0, 0, 1, 2, 1, 2, 0, 1, 2, 0, 1, 0, 2, 2, 2, 2, 2, 0, 0, 2, 0, 0, 0, 1, 2, 0, 1, 2, 1, 1, 1, 1, 2, 1, 1, 2, 1, 2, 1, 2, 0, 2, 1, 1, 0, 0, 0, 2, 2, 2, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 2, 1, 2, 1, 0, 0, 0, 1, 2, 0, 0, 0, 2, 0, 0, 1, 0, 1, 2, 1, 2, 0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 2, 1, 2, 2, 1, 1, 0, 0, 2, 1, 1, 2, 2, 1, 1, 2, 1, 1, 1, 2, 1, 2, 1, 1, 2, 0, 0, 0, 1, 0, 0, 0, 1, 2, 1, 0, 2, 0, 2, 1, 0, 2, 1, 1, 2, 2, 1, 2, 0, 2, 0, 1, 1, 0, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 0, 1, 2, 1, 0, 2, 2, 0, 2, 1, 1, 2, 0, 2, 1, 2, 2, 2, 0, 0, 0, 2, 1, 2, 2, 0, 0, 2, 0, 2, 2, 1, 1, 2, 1, 0, 0, 1, 2, 0, 2, 2, 1, 2, 2, 2, 0, 0, 1, 1, 2, 2, 1, 1, 0, 1, 1, 0, 0, 2, 0, 2, 1, 0, 1, 0, 2, 0, 1, 0, 0, 1, 2, 2, 2, 1, 0, 2, 2, 0, 2, 0, 1, 0, 1, 0, 0, 2, 2, 1]), array('H', [0, 1, 2, 1, 1, 2, 2, 2, 1, 0, 0, 2, 2, 2, 2, 2, 2, 1, 2, 1, 2, 0, 0, 0, 1, 0, 2, 2, 2, 0, 0, 2, 0, 0, 0, 1, 1, 2, 1, 0, 0, 1, 0, 1, 0, 1, 0, 2, 0, 0, 0, 1, 1, 0, 0, 0, 2, 1, 1, 2, 0, 1, 1, 2, 2, 2, 1, 2, 2, 2, 2, 0, 2, 1, 1, 1, 2, 1, 0, 0, 1, 0, 0, 0, 0, 2, 1, 0, 0, 1, 1, 1, 0, 1, 2, 2, 2, 1, 2, 0, 2, 0, 0, 2, 2, 1, 2, 0, 0, 1, 0, 0, 1, 0, 1, 1, 2, 1, 2, 0, 1, 1, 0, 1, 0, 2, 2, 0, 0, 2, 0, 0, 0, 2, 1, 0, 1, 1, 1, 2, 0, 0, 1, 0, 1, 2, 0, 0, 1, 1, 1, 0, 2, 0, 2, 0, 0, 2, 0, 0, 0, 1, 2, 2, 0, 1, 0, 0, 1, 2, 0, 2, 1, 0, 0, 0, 1, 2, 1, 2, 1, 1, 1, 0, 1, 0, 1, 2, 1, 2, 1, 0, 0, 0, 1, 2, 1, 1, 2, 2, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 2, 1, 1, 0, 1, 0, 0, 0, 1, 1, 1, 0, 2, 1, 1, 1, 1, 0, 1, 2, 1, 1, 0, 0, 0, 0, 1, 0, 0, 2, 0, 0, 1, 0, 1, 2, 2, 1, 0, 1, 0, 2, 0, 1, 2, 0, 2, 0, 0, 1, 2, 2, 1, 2, 0, 2, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 2, 1, 2, 1, 1, 2, 1, 2, 2, 0, 0, 2, 0, 2, 1, 2, 0, 0, 2, 1, 0, 0, 1, 1, 2, 2, 1, 2, 2, 1, 0, 0, 2, 0, 2, 0, 0, 2, 1, 2, 2, 0, 0, 2, 2, 0, 2, 1, 0, 0, 2, 2, 1, 1, 0, 0, 1, 2, 2, 1, 1, 2, 2, 1, 2, 0, 0, 1, 1, 1, 0, 1, 0, 2, 2, 2, 0, 1, 0, 0, 1, 0, 0, 2, 1, 2, 0, 0, 0, 0, 1, 2, 2, 1, 0, 0, 0, 0, 0, 1, 0, 2, 1, 1, 2, 2, 0, 2, 2, 2, 2, 1, 2, 2, 0, 2, 1, 2, 1, 0, 2, 0, 1, 0, 0, 0, 1, 0, 1, 2, 0, 1, 2, 2, 2, 2, 2, 2, 2, 1, 0, 2, 2, 1, 2, 1, 0, 1, 1, 0, 2, 1, 0, 2, 1, 2, 1, 2, 1, 1, 1, 2, 1, 1, 0, 0, 0, 0, 2, 1, 0, 1, 0, 0, 0, 2, 1, 2, 2, 1, 0, 0, 2, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 2, 0, 1, 2, 2, 2, 2, 0, 1, 1, 0, 2, 2, 1, 0, 2, 0, 1, 2, 2, 1, 0, 0, 0, 2, 1, 1, 2, 1, 1, 0, 1, 2, 2, 1, 1, 0, 0]), array('H', [1, 0, 0, 0, 2, 0, 0, 1, 2, 1, 2, 0, 1, 1, 0, 0, 1, 2, 0, 2, 0, 1, 2, 2, 2, 1, 0, 1, 0, 1, 2, 0, 2, 1, 2, 2, 2, 1, 2, 1, 1, 0, 2, 0, 1, 2, 2, 1, 1, 2, 1, 0, 0, 2, 1, 2, 0, 0, 0, 0, 2, 0, 2, 1, 1, 1, 2, 1, 1, 0, 0, 2, 0, 2, 0, 0, 0, 0, 2, 1, 2, 2, 1, 1, 2, 0, 0, 2, 2, 2, 0, 2, 2, 0, 1, 0, 1, 2, 1, 1, 0, 2, 2, 0, 0, 0, 1, 2, 1, 0, 2, 1, 0, 1, 2, 0, 0, 2, 1, 1, 0, 0, 1, 2, 1, 1, 0, 1, 1, 1, 2, 2, 2, 0, 0, 1, 0, 2, 2, 1, 2, 1, 0, 2, 0, 1, 2, 1, 0, 2, 2, 1, 0, 2, 1, 2, 2, 1, 2, 1, 1, 0, 1, 1, 2, 0, 2, 1, 0, 0, 1, 0, 2, 1, 1, 2, 2, 1, 2, 0, 0, 2, 0, 1, 2, 1, 0, 0, 0, 1, 0, 2, 1, 2, 0, 1, 0, 0, 0, 1, 0, 2, 0, 2, 1, 1, 1, 0, 1, 1, 1, 2, 2, 1, 0, 2, 2, 1, 0, 2, 2, 2, 0, 2, 2, 2, 2, 1, 0, 1, 0, 0, 2, 2, 2, 2, 2, 2, 2, 0, 2, 1, 2, 2, 0, 1, 1, 2, 2, 2, 2, 1, 2, 2, 0, 2, 1, 2, 1, 2, 0, 1, 2, 0, 1, 0, 0, 2, 2, 0, 2, 2, 2, 0, 0, 0, 0, 0, 2, 1, 0, 1, 2, 2, 0, 0, 1, 0, 1, 2, 0, 2, 0, 0, 0, 2, 1, 0, 0, 2, 1, 2, 0, 0, 0, 2, 1, 1, 0, 1, 1, 0, 2, 0, 2, 2, 0, 2, 1, 0, 2, 2, 1, 1, 2, 1, 0, 2, 1, 0, 1, 2, 2, 2, 1, 2, 1, 1, 0, 2, 1, 0, 2, 0, 1, 2, 0, 2, 2, 2, 2, 2, 0, 1, 1, 2, 2, 1, 2, 0, 1, 2, 0, 2, 1, 1, 2, 2, 1, 0, 0, 0, 0, 2, 2, 2, 1, 2, 0, 2, 0, 0, 2, 1, 1, 2, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 2, 1, 0, 2, 0, 1, 2, 1, 2, 1, 2, 0, 2, 2, 1, 0, 0, 1, 0, 0, 0, 2, 2, 0, 1, 2, 0, 0, 2, 2, 0, 1, 1, 0, 2, 0, 0, 1, 0, 0, 0, 0, 0, 1, 2, 2, 1, 2, 1, 1, 1, 2, 1, 2, 1, 1, 2, 0, 0, 0, 1, 2, 2, 1, 1, 1, 1, 2, 0, 1, 1, 2, 2, 2, 2, 1, 1, 0, 2, 2, 0, 0, 1, 1, 1, 2, 0, 2, 1, 0, 2, 1, 1, 2, 2, 1, 0, 0, 1, 1, 2, 1, 0, 0, 1, 0, 2, 2, 2, 0, 1, 2, 0, 1, 2])]
+&gt;&gt;&gt; aDict["_last_part_gather_start"] # 上一次在ring中做rebalance时的起点位置。
+0
+&gt;&gt;&gt; aDict["_last_part_moves_epoch"] # 从上一次生成_last_part_moves_epoch到现在的时间
+1355811894
+&gt;&gt;&gt; aDict["_remove_devs"] # 移除的设备
+[]
+</code></pre>
+</li>
+<li>
+<p>Ring File</p>
+<p>可以看到Ring File里的内容包括devs情况列表，replica2part2dev的映射表，还有part的大小。</p>
+<pre><code>self._ring = RingData([array('H', p2d) for p2d in
+                      self._replica2part2dev],
+                     devs, 32 - self.part_power)
+</code></pre>
+</li>
+<li>
+<p>文件的存储，account/container/object这样的路径。</p>
+<pre><code>pear@DevStack:/opt/stack/data/drives$ find sdb1/1/sdb1/objects/ | xargs -i du -sh {}
+31M sdb1/1/sdb1/objects/
+4.6M    sdb1/1/sdb1/objects/189
+0   sdb1/1/sdb1/objects/189/.lock
+4.6M    sdb1/1/sdb1/objects/189/c56
+4.6M    sdb1/1/sdb1/objects/189/c56/5ea046e3260c320ff97332dff8abac56
+4.6M    sdb1/1/sdb1/objects/189/c56/5ea046e3260c320ff97332dff8abac56/1355811994.43642.data
+4.0K    sdb1/1/sdb1/objects/189/hashes.pkl
+2.2M    sdb1/1/sdb1/objects/159
+0   sdb1/1/sdb1/objects/159/.lock
+2.2M    sdb1/1/sdb1/objects/159/c2b
+2.2M    sdb1/1/sdb1/objects/159/c2b/4fc504f28d380bca87310881146d3c2b
+2.2M    sdb1/1/sdb1/objects/159/c2b/4fc504f28d380bca87310881146d3c2b/1355811999.56040.data
+4.0K    sdb1/1/sdb1/objects/159/hashes.pkl
+25M sdb1/1/sdb1/objects/280
+0   sdb1/1/sdb1/objects/280/.lock
+24M sdb1/1/sdb1/objects/280/2c6
+24M sdb1/1/sdb1/objects/280/2c6/8c0f01b73cfeb51b226fed759368a2c6
+24M sdb1/1/sdb1/objects/280/2c6/8c0f01b73cfeb51b226fed759368a2c6/1355812004.59216.data
+4.0K    sdb1/1/sdb1/objects/280/hashes.pkl
+pear@DevStack:/opt/stack/data/drives$ find sdb1/2/sdb1/objects/ | xargs -i du -sh {}
+31M sdb1/2/sdb1/objects/
+4.6M    sdb1/2/sdb1/objects/189
+0   sdb1/2/sdb1/objects/189/.lock
+4.6M    sdb1/2/sdb1/objects/189/c56
+4.6M    sdb1/2/sdb1/objects/189/c56/5ea046e3260c320ff97332dff8abac56
+4.6M    sdb1/2/sdb1/objects/189/c56/5ea046e3260c320ff97332dff8abac56/1355811994.43642.data
+4.0K    sdb1/2/sdb1/objects/189/hashes.pkl
+2.2M    sdb1/2/sdb1/objects/159
+0   sdb1/2/sdb1/objects/159/.lock
+2.2M    sdb1/2/sdb1/objects/159/c2b
+2.2M    sdb1/2/sdb1/objects/159/c2b/4fc504f28d380bca87310881146d3c2b
+2.2M    sdb1/2/sdb1/objects/159/c2b/4fc504f28d380bca87310881146d3c2b/1355811999.56040.data
+4.0K    sdb1/2/sdb1/objects/159/hashes.pkl
+25M sdb1/2/sdb1/objects/280
+0   sdb1/2/sdb1/objects/280/.lock
+24M sdb1/2/sdb1/objects/280/2c6
+24M sdb1/2/sdb1/objects/280/2c6/8c0f01b73cfeb51b226fed759368a2c6
+24M sdb1/2/sdb1/objects/280/2c6/8c0f01b73cfeb51b226fed759368a2c6/1355812004.59216.data
+4.0K    sdb1/2/sdb1/objects/280/hashes.pkl
+</code></pre>
+</li>
+<li>
+<p>WorkFlow</p>
+<p>当有请求进入，比如object POST。
+该请求会被linux kernel调度给一个proxy进程（如果他们在同一个IP同一个port上），然后到obj的controller里，交给POST方法。</p>
+<pre><code>partition, nodes = self.app.object_ring.get_node(self.account_name, self.container_name, self.object_name)
+resp = self.make_requests(req, self.app.object_ring, partition, 'POST', req.path_info, headers)
+</code></pre>
+<p>get_node方法里，先对path去hash，移位得到对应的par数。然后取出所有需要更新的node。然后交给make_requests。</p>
+<pre><code>key = hash_path(account, container, obj, raw_digest=True)
+part = struct.unpack_from('&gt;I', key)[0] &gt;&gt; self._part_shift
+seen_ids = set()
+return part, [self._devs[r[part]] for r in self._replica2part2dev_id if not (r[part] in seen_ids or seen_ids.add(r[part]))]
+</code></pre>
+<p>make_requests方法里，发出请求多个，选取最好的返回。</p>
+<pre><code>start_nodes = ring.get_part_nodes(part)
+nodes = self.iter_nodes(part, start_nodes, ring)
+pile = GreenPile(len(start_nodes))
+for head in headers:
+    pile.spawn(self._make_request, nodes, part, method, path,
+               head, query_string, self.app.logger.thread_locals)
+response = [resp for resp in pile if resp]
+while len(response) &lt; len(start_nodes):
+    response.append((HTTP_SERVICE_UNAVAILABLE, '', ''))
+statuses, reasons, bodies = zip(*response)
+return self.best_response(req, statuses, reasons, bodies,
+                          '%s %s' % (self.server_type, req.method))
+</code></pre>
+</li>
+</ol>
+</body>
+</html>
